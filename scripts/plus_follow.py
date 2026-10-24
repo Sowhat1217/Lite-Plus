@@ -4,12 +4,23 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import subprocess
 import sys
 
-BASELINE_KEYS = ("lite", "lite_agent", "lite_theme", "lite_web", "plus")
+BASELINE_KEYS = (
+    "lite",
+    "lite_agent",
+    "lite_hash",
+    "lite_theme",
+    "lite_web",
+    "lite_web_hash",
+    "plus",
+)
+HASH_RE = re.compile(r"(?:lite|komari)-version-hash:\s*([A-Za-z0-9]{7})", re.I)
+PLUS_HASH_ALPHABET = "abcdefghijklmnoprstuvwxyz0123456789"
 
 
 def parse_three(version: str) -> tuple[int, int, int]:
@@ -28,6 +39,41 @@ def bump_plus(plus: str, old_lite: str, new_lite: str) -> str:
     if new_v[0] != old_v[0] or new_v[1] != old_v[1]:
         return f"{plus_v[0]}.{plus_v[1] + 1}.0"
     return f"{plus_v[0]}.{plus_v[1]}.{plus_v[2] + 1}"
+
+
+def release_hash(body: str) -> str:
+    match = HASH_RE.search(body or "")
+    return match.group(1) if match else ""
+
+
+def valid_hash(value: str) -> bool:
+    text = (value or "").strip()
+    return text == "" or bool(re.fullmatch(r"[A-Za-z0-9]{7}", text))
+
+
+def new_plus_hash() -> str:
+    while True:
+        raw = os.urandom(7)
+        value = "".join(PLUS_HASH_ALPHABET[byte % len(PLUS_HASH_ALPHABET)] for byte in raw)
+        if re.search(r"[a-z]", value) and re.search(r"[0-9]", value):
+            return value
+
+
+def decide_same_version(base_lite_hash: str, base_web_hash: str, lite_hash: str, web_hash: str) -> str:
+    """skip, wait, or rebuild when Lite's x.y.z tag did not change."""
+    base_lite_hash = (base_lite_hash or "").strip()
+    base_web_hash = (base_web_hash or "").strip()
+    lite_hash = (lite_hash or "").strip()
+    web_hash = (web_hash or "").strip()
+    if not lite_hash:
+        return "skip"
+    if lite_hash == base_lite_hash and web_hash == base_web_hash:
+        return "skip"
+    if lite_hash == base_lite_hash:
+        return "wait"
+    if web_hash and base_web_hash and web_hash == base_web_hash:
+        return "wait"
+    return "rebuild"
 
 
 def theme_git_ref(raw: str) -> str:
@@ -83,13 +129,20 @@ def validate_baseline(path: pathlib.Path) -> dict:
     if keys != BASELINE_KEYS:
         raise SystemExit(f"{path} keys must be {', '.join(BASELINE_KEYS)}, got: {', '.join(keys)}")
     for key in BASELINE_KEYS:
+        if key in {"lite_hash", "lite_web_hash"}:
+            if not valid_hash(str(data[key])):
+                raise SystemExit(f"{path} invalid {key}")
+            continue
         if not str(data[key]).strip():
             raise SystemExit(f"{path} missing {key}")
     return data
 
 
 def write_baseline(path: pathlib.Path, payload: dict) -> None:
-    ordered = {key: payload[key] for key in ("plus", "lite", "lite_web", "lite_agent", "lite_theme")}
+    ordered = {
+        key: payload[key]
+        for key in ("plus", "lite", "lite_hash", "lite_web", "lite_web_hash", "lite_agent", "lite_theme")
+    }
     path.write_text(json.dumps(ordered, indent=2) + "\n", encoding="utf-8")
 
 
@@ -101,7 +154,16 @@ def replace_once(path: pathlib.Path, pattern: str, repl: str, label: str) -> Non
     path.write_text(updated, encoding="utf-8")
 
 
-def rewrite_server(root: pathlib.Path, plus: str, lite: str, lite_web: str, lite_agent: str, lite_theme: str) -> None:
+def rewrite_server(
+    root: pathlib.Path,
+    plus: str,
+    lite: str,
+    lite_web: str,
+    lite_agent: str,
+    lite_theme: str,
+    lite_hash: str = "",
+    lite_web_hash: str = "",
+) -> None:
     replace_once(
         root / "utils" / "version.go",
         r'CurrentVersion = "[^"]*"',
@@ -113,14 +175,25 @@ def rewrite_server(root: pathlib.Path, plus: str, lite: str, lite_web: str, lite
         {
             "plus": plus,
             "lite": lite,
+            "lite_hash": lite_hash,
             "lite_web": lite_web,
+            "lite_web_hash": lite_web_hash,
             "lite_agent": lite_agent,
             "lite_theme": lite_theme,
         },
     )
 
 
-def rewrite_web(root: pathlib.Path, plus: str, lite: str, lite_web: str, lite_agent: str, lite_theme: str) -> None:
+def rewrite_web(
+    root: pathlib.Path,
+    plus: str,
+    lite: str,
+    lite_web: str,
+    lite_agent: str,
+    lite_theme: str,
+    lite_hash: str = "",
+    lite_web_hash: str = "",
+) -> None:
     pkg = root / "package.json"
     data = json.loads(pkg.read_text(encoding="utf-8"))
     data["name"] = "lite-plus-web"
@@ -141,7 +214,9 @@ def rewrite_web(root: pathlib.Path, plus: str, lite: str, lite_web: str, lite_ag
         {
             "plus": plus,
             "lite": lite,
+            "lite_hash": lite_hash,
             "lite_web": lite_web,
+            "lite_web_hash": lite_web_hash,
             "lite_agent": lite_agent,
             "lite_theme": lite_theme,
         },
@@ -151,7 +226,7 @@ def rewrite_web(root: pathlib.Path, plus: str, lite: str, lite_web: str, lite_ag
 def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit(
-            "usage: plus_follow.py bump|theme-ref|validate-baseline|rewrite-server|rewrite-web|apply-ours ..."
+            "usage: plus_follow.py bump|theme-ref|validate-baseline|rewrite-server|rewrite-web|apply-ours|release-hash|decide-same|new-hash ..."
         )
     cmd = sys.argv[1]
     if cmd == "bump":
@@ -170,14 +245,35 @@ def main() -> None:
         json.dump(data, sys.stdout)
         return
     if cmd == "rewrite-server":
-        if len(sys.argv) != 8:
-            raise SystemExit("usage: plus_follow.py rewrite-server <root> <plus> <lite> <lite_web> <lite_agent> <lite_theme>")
-        rewrite_server(pathlib.Path(sys.argv[2]), *sys.argv[3:8])
+        if len(sys.argv) != 10:
+            raise SystemExit(
+                "usage: plus_follow.py rewrite-server <root> <plus> <lite> <lite_web> <lite_agent> <lite_theme> <lite_hash> <lite_web_hash>"
+            )
+        rewrite_server(pathlib.Path(sys.argv[2]), *sys.argv[3:10])
         return
     if cmd == "rewrite-web":
-        if len(sys.argv) != 8:
-            raise SystemExit("usage: plus_follow.py rewrite-web <root> <plus> <lite> <lite_web> <lite_agent> <lite_theme>")
-        rewrite_web(pathlib.Path(sys.argv[2]), *sys.argv[3:8])
+        if len(sys.argv) != 10:
+            raise SystemExit(
+                "usage: plus_follow.py rewrite-web <root> <plus> <lite> <lite_web> <lite_agent> <lite_theme> <lite_hash> <lite_web_hash>"
+            )
+        rewrite_web(pathlib.Path(sys.argv[2]), *sys.argv[3:10])
+        return
+    if cmd == "release-hash":
+        if len(sys.argv) == 2 or sys.argv[2] == "-":
+            body = sys.stdin.read()
+        elif len(sys.argv) == 3:
+            body = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+        else:
+            raise SystemExit("usage: plus_follow.py release-hash [<file>|-]")
+        sys.stdout.write(release_hash(body))
+        return
+    if cmd == "decide-same":
+        if len(sys.argv) != 6:
+            raise SystemExit("usage: plus_follow.py decide-same <base_lite_hash> <base_web_hash> <lite_hash> <web_hash>")
+        sys.stdout.write(decide_same_version(*sys.argv[2:6]))
+        return
+    if cmd == "new-hash":
+        sys.stdout.write(new_plus_hash())
         return
     if cmd == "apply-ours":
         if len(sys.argv) != 5:

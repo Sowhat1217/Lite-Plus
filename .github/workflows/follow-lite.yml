@@ -67,9 +67,11 @@ jobs:
           PLUS="$(python3 -c "import json; print(json.load(open('/tmp/baseline.json'))['plus'])")"
           BASE_LITE="$(python3 -c "import json; print(json.load(open('/tmp/baseline.json'))['lite'])")"
           BASE_WEB="$(python3 -c "import json; print(json.load(open('/tmp/baseline.json'))['lite_web'])")"
+          BASE_LITE_HASH="$(python3 -c "import json; print(json.load(open('/tmp/baseline.json'))['lite_hash'])")"
+          BASE_WEB_HASH="$(python3 -c "import json; print(json.load(open('/tmp/baseline.json'))['lite_web_hash'])")"
           BASE_AGENT="$(python3 -c "import json; print(json.load(open('/tmp/baseline.json'))['lite_agent'])")"
           BASE_THEME="$(python3 -c "import json; print(json.load(open('/tmp/baseline.json'))['lite_theme'])")"
-          echo "current plus=$PLUS lite=$BASE_LITE lite_web=$BASE_WEB"
+          echo "current plus=$PLUS lite=$BASE_LITE@$BASE_LITE_HASH lite_web=$BASE_WEB@$BASE_WEB_HASH"
 
           if [ -n "${REQUESTED_TAG:-}" ]; then
             TAG="$REQUESTED_TAG"
@@ -86,9 +88,39 @@ jobs:
           fi
           echo "follow Lite $TAG"
 
+          LITE_HASH="$(gh release view "$TAG" --repo nuomiiiii/Lite --json body --jq .body | python3 scripts/plus_follow.py release-hash -)"
+          WEB_HASH=""
+          if gh release view "$TAG" --repo nuomiiiii/Lite-web >/dev/null 2>&1; then
+            WEB_HASH="$(gh release view "$TAG" --repo nuomiiiii/Lite-web --json body --jq .body | python3 scripts/plus_follow.py release-hash -)"
+          fi
+          echo "Lite $TAG hash=$LITE_HASH lite_web_hash=$WEB_HASH"
+
+          MODE="bump"
+          NEW_PLUS="$PLUS"
+          NEW_PLUS_HASH=""
           if [ "$TAG" = "$BASE_LITE" ] && [ "$TAG" = "$BASE_WEB" ]; then
-            echo "already following $TAG"
-            exit 0
+            ACTION="$(python3 scripts/plus_follow.py decide-same "$BASE_LITE_HASH" "$BASE_WEB_HASH" "$LITE_HASH" "$WEB_HASH")"
+            case "$ACTION" in
+              skip)
+                echo "already following $TAG hash=$LITE_HASH"
+                exit 0
+                ;;
+              wait)
+                echo "Lite $TAG same-version hashes are not both ready yet (lite=$LITE_HASH web=$WEB_HASH); skip this round"
+                exit 0
+                ;;
+              rebuild)
+                MODE="rebuild"
+                NEW_PLUS_HASH="$(python3 scripts/plus_follow.py new-hash)"
+                echo "same-version follow Lite $TAG $BASE_LITE_HASH → $LITE_HASH; Plus $PLUS hash $NEW_PLUS_HASH"
+                ;;
+              *)
+                echo "unknown decide-same result: $ACTION" >&2
+                exit 1
+                ;;
+            esac
+          else
+            NEW_PLUS="$(python3 scripts/plus_follow.py bump "$PLUS" "$BASE_LITE" "$TAG")"
           fi
 
           if ! git ls-remote --exit-code https://github.com/nuomiiiii/Lite-web.git "refs/tags/${TAG}" >/dev/null; then
@@ -97,13 +129,12 @@ jobs:
           fi
 
           if [ -z "${PLUS_FOLLOW_TOKEN:-}" ]; then
-            echo "PLUS_FOLLOW_TOKEN is required to push Lite-Plus-web and dispatch publish-stable-release.yml"
+            echo "PLUS_FOLLOW_TOKEN is required to push Lite-Plus-web and dispatch publish-stable-release.yml or rebuild-release.yml"
             exit 1
           fi
 
-          NEW_PLUS="$(python3 scripts/plus_follow.py bump "$PLUS" "$BASE_LITE" "$TAG")"
           THEME_REF="$(python3 scripts/plus_follow.py theme-ref "$BASE_THEME")"
-          echo "next plus=$NEW_PLUS theme_ref=$THEME_REF"
+          echo "mode=$MODE next plus=$NEW_PLUS theme_ref=$THEME_REF"
 
           OWNER="${GITHUB_REPOSITORY_OWNER}"
           WEB_REPO="${OWNER}/Lite-Plus-web"
@@ -136,7 +167,7 @@ jobs:
             exit 0
           fi
 
-          python3 scripts/plus_follow.py rewrite-web "$WEB_DIR" "$NEW_PLUS" "$TAG" "$TAG" "$BASE_AGENT" "$BASE_THEME"
+          python3 scripts/plus_follow.py rewrite-web "$WEB_DIR" "$NEW_PLUS" "$TAG" "$TAG" "$BASE_AGENT" "$BASE_THEME" "$LITE_HASH" "$WEB_HASH"
           git -C "$WEB_DIR" add -A
           git -C "$WEB_DIR" diff --cached --quiet || git -C "$WEB_DIR" commit -m "follow: Lite-web ${TAG} → Plus-web ${NEW_PLUS}"
 
@@ -157,38 +188,77 @@ jobs:
             exit 0
           fi
 
-          python3 scripts/plus_follow.py rewrite-server "$GITHUB_WORKSPACE" "$NEW_PLUS" "$TAG" "$TAG" "$BASE_AGENT" "$BASE_THEME"
+          python3 scripts/plus_follow.py rewrite-server "$GITHUB_WORKSPACE" "$NEW_PLUS" "$TAG" "$TAG" "$BASE_AGENT" "$BASE_THEME" "$LITE_HASH" "$WEB_HASH"
           go mod tidy
           go test ./...
           git add -A
           git diff --cached --quiet || git commit -m "follow: Lite ${TAG} → Plus ${NEW_PLUS}"
 
-          git -C "$WEB_DIR" push origin HEAD:main
-          git -C "$WEB_DIR" tag "$NEW_PLUS"
-          git -C "$WEB_DIR" push origin "$NEW_PLUS"
-          WEB_SHA="$(git -C "$WEB_DIR" rev-parse HEAD)"
-          gh release create "$NEW_PLUS" \
-            --repo "$WEB_REPO" \
-            --target "$WEB_SHA" \
-            --title "$NEW_PLUS" \
-            --notes "基于 Lite-web ${TAG}。Plus-web ${NEW_PLUS}。"
+          wait_web_dist() {
+            for _ in $(seq 1 40); do
+              if gh release view "$NEW_PLUS" --repo "$WEB_REPO" --json assets --jq '.assets[].name' | grep -qx dist-release.zip; then
+                return 0
+              fi
+              sleep 15
+            done
+            echo "Lite-Plus-web ${NEW_PLUS} dist-release.zip did not appear" >&2
+            return 1
+          }
 
-          for _ in $(seq 1 40); do
-            if gh release view "$NEW_PLUS" --repo "$WEB_REPO" --json assets --jq '.assets[].name' | grep -qx dist-release.zip; then
-              break
-            fi
-            sleep 15
-          done
-          if ! gh release view "$NEW_PLUS" --repo "$WEB_REPO" --json assets --jq '.assets[].name' | grep -qx dist-release.zip; then
-            echo "Lite-Plus-web ${NEW_PLUS} dist-release.zip did not appear"
-            exit 1
+          patch_release_hash() {
+            local repo="$1"
+            local tag="$2"
+            local hash="$3"
+            local body_file="$RUNNER_TEMP/release-body-${repo##*/}.md"
+            gh release view "$tag" --repo "$repo" --json body --jq .body > "$body_file"
+            BODY_FILE="$body_file" VERSION_HASH="$hash" python3 - <<'PY'
+import os, pathlib, re
+path = pathlib.Path(os.environ["BODY_FILE"])
+marker = f"<!-- lite-version-hash: {os.environ['VERSION_HASH']} -->"
+body = path.read_text(encoding="utf-8")
+pattern = re.compile(r"<!--\s*(?:lite|komari)-version-hash:\s*[A-Za-z0-9]{7}\s*-->", re.I)
+path.write_text(pattern.sub(marker, body, count=1) if pattern.search(body) else f"{marker}\n\n{body}", encoding="utf-8")
+PY
+            gh release edit "$tag" --repo "$repo" --notes-file "$body_file"
+          }
+
+          git -C "$WEB_DIR" push origin HEAD:main
+          WEB_SHA="$(git -C "$WEB_DIR" rev-parse HEAD)"
+          if [ "$MODE" = "rebuild" ]; then
+            git -C "$WEB_DIR" tag -f "$NEW_PLUS" "$WEB_SHA"
+            git -C "$WEB_DIR" push origin "refs/tags/$NEW_PLUS" --force
+            gh release edit "$NEW_PLUS" --repo "$WEB_REPO" --draft=false --tag "$NEW_PLUS" --target "$WEB_SHA" --title "$NEW_PLUS" || \
+              gh release edit "$NEW_PLUS" --repo "$WEB_REPO" --target "$WEB_SHA" --title "$NEW_PLUS"
+            patch_release_hash "$WEB_REPO" "$NEW_PLUS" "$NEW_PLUS_HASH"
+            gh release delete-asset "$NEW_PLUS" dist-release.zip --repo "$WEB_REPO" --yes || true
+            gh workflow run publish-dist-release.yml --repo "$WEB_REPO" --ref "$NEW_PLUS" -f tag="$NEW_PLUS"
+          else
+            git -C "$WEB_DIR" tag "$NEW_PLUS"
+            git -C "$WEB_DIR" push origin "$NEW_PLUS"
+            gh release create "$NEW_PLUS" \
+              --repo "$WEB_REPO" \
+              --target "$WEB_SHA" \
+              --title "$NEW_PLUS" \
+              --notes "基于 Lite-web ${TAG}。Plus-web ${NEW_PLUS}。"
           fi
+          wait_web_dist
 
           git push origin HEAD:main
-          gh workflow run publish-stable-release.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref main \
-            -f version="$NEW_PLUS" \
-            -f target_ref=main \
-            -f web_ref="$NEW_PLUS" \
-            -f theme_ref="$THEME_REF"
+          if [ "$MODE" = "rebuild" ]; then
+            gh workflow run rebuild-release.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref main \
+              -f release_tag="$NEW_PLUS" \
+              -f version_hash="$NEW_PLUS_HASH" \
+              -f server_ref=main \
+              -f frontend_ref="$NEW_PLUS" \
+              -f theme_ref="$THEME_REF"
+          else
+            gh workflow run publish-stable-release.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref main \
+              -f version="$NEW_PLUS" \
+              -f target_ref=main \
+              -f web_ref="$NEW_PLUS" \
+              -f theme_ref="$THEME_REF"
+          fi

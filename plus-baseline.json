@@ -1,7 +1,9 @@
 {
   "plus": "0.0.3",
   "lite": "2.3.10",
+  "lite_hash": "k8w2n5h",
   "lite_web": "2.3.10",
+  "lite_web_hash": "",
   "lite_agent": "2.3.10.0",
   "lite_theme": "1.2.9"
 }

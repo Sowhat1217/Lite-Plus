@@ -48,17 +48,21 @@ class PlusFollowTests(unittest.TestCase):
                 {
                     "plus": "0.0.1",
                     "lite": "2.3.10",
+                    "lite_hash": "k8w2n5h",
                     "lite_web": "2.3.10",
+                    "lite_web_hash": "",
                     "lite_agent": "2.3.10.0",
                     "lite_theme": "1.2.9",
                 },
             )
             plus_follow.validate_baseline(root / "plus-baseline.json")
-            plus_follow.rewrite_server(root, "0.0.2", "2.3.11", "2.3.11", "2.3.10.0", "1.2.9")
+            plus_follow.rewrite_server(root, "0.0.2", "2.3.11", "2.3.11", "2.3.10.0", "1.2.9", "n8k2m5y", "n8k2m5y")
             self.assertIn('CurrentVersion = "0.0.2"', (root / "utils" / "version.go").read_text(encoding="utf-8"))
             data = plus_follow.validate_baseline(root / "plus-baseline.json")
             self.assertEqual(data["plus"], "0.0.2")
             self.assertEqual(data["lite"], "2.3.11")
+            self.assertEqual(data["lite_hash"], "n8k2m5y")
+            self.assertEqual(data["lite_web_hash"], "n8k2m5y")
 
     def test_rewrite_web_keeps_plus_package_name(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -71,13 +75,31 @@ class PlusFollowTests(unittest.TestCase):
                 '{"name": "lite-web", "version": "2.3.11", "packages": {"": {"name": "lite-web", "version": "2.3.11"}}}\n',
                 encoding="utf-8",
             )
-            plus_follow.rewrite_web(root, "0.0.2", "2.3.11", "2.3.11", "2.3.10.0", "1.2.9")
+            plus_follow.rewrite_web(root, "0.0.2", "2.3.11", "2.3.11", "2.3.10.0", "1.2.9", "n8k2m5y", "")
             pkg = json.loads((root / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(pkg["name"], "lite-plus-web")
             self.assertEqual(pkg["version"], "0.0.2")
             lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
             self.assertEqual(lock["name"], "lite-plus-web")
             self.assertEqual(lock["packages"][""]["version"], "0.0.2")
+            data = plus_follow.validate_baseline(root / "plus-baseline.json")
+            self.assertEqual(data["lite_hash"], "n8k2m5y")
+            self.assertEqual(data["lite_web_hash"], "")
+
+    def test_release_hash_and_same_version_decision(self) -> None:
+        self.assertEqual(plus_follow.release_hash("<!-- lite-version-hash: k8w2n5h -->\n"), "k8w2n5h")
+        self.assertEqual(plus_follow.release_hash("no marker"), "")
+        self.assertEqual(plus_follow.decide_same_version("k8w2n5h", "", "k8w2n5h", ""), "skip")
+        self.assertEqual(plus_follow.decide_same_version("k8w2n5h", "", "abc1234", ""), "rebuild")
+        self.assertEqual(plus_follow.decide_same_version("k8w2n5h", "aaaaaa1", "k8w2n5h", "bbbbbb2"), "wait")
+        self.assertEqual(plus_follow.decide_same_version("k8w2n5h", "aaaaaa1", "abc1234", "aaaaaa1"), "wait")
+        self.assertEqual(plus_follow.decide_same_version("k8w2n5h", "aaaaaa1", "abc1234", "bbbbbb2"), "rebuild")
+        self.assertEqual(plus_follow.decide_same_version("k8w2n5h", "", "", ""), "skip")
+        value = plus_follow.new_plus_hash()
+        self.assertEqual(len(value), 7)
+        self.assertNotIn("q", value)
+        self.assertRegex(value, r"[a-z]")
+        self.assertRegex(value, r"[0-9]")
 
 
 if __name__ == "__main__":
