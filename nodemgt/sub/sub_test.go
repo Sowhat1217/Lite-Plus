@@ -179,6 +179,46 @@ func TestAssemblePrefersIssuedCertDomain(t *testing.T) {
 	}
 }
 
+func TestAssembleNodeAddressFollowsStack(t *testing.T) {
+	creds := []models.Credential{{UUID: "u", Enabled: true}}
+	addrs := map[string]nodeAddr{"node-1": {IPv4: "203.0.113.9", IPv6: "2001:db8::1"}}
+	user := models.NodeUser{Username: "alice"}
+	inbound := func(id, stack, proto string) models.Inbound {
+		return models.Inbound{
+			ID: id, NodeUUID: "node-1", Name: id, Protocol: proto,
+			Listen: "0.0.0.0,::", Port: 443, Enabled: true,
+			SettingsJSON: `{"share_strategy":"node","stack":"` + stack + `"}`,
+		}
+	}
+	v6 := assembleWithAddrs(user, []models.Inbound{inbound("v6", "ipv6", "vless")}, creds, map[string]bool{"v6": true}, addrs, nil)
+	if len(v6) != 1 || v6[0].Host != "2001:db8::1" {
+		t.Fatalf("ipv6 stack: %+v", v6)
+	}
+	dual := assembleWithAddrs(user, []models.Inbound{inbound("dual", "dual", "shadowsocks")}, creds, map[string]bool{"dual": true}, addrs, nil)
+	if len(dual) != 1 || dual[0].Host != "2001:db8::1" {
+		t.Fatalf("dual stack: %+v", dual)
+	}
+	empty := assembleWithAddrs(user, []models.Inbound{inbound("empty", "", "vless")}, creds, map[string]bool{"empty": true}, addrs, nil)
+	if len(empty) != 1 || empty[0].Host != "2001:db8::1" {
+		t.Fatalf("empty stack is dual: %+v", empty)
+	}
+	v4 := assembleWithAddrs(user, []models.Inbound{inbound("v4", "ipv4", "vless")}, creds, map[string]bool{"v4": true}, addrs, nil)
+	if len(v4) != 1 || v4[0].Host != "203.0.113.9" {
+		t.Fatalf("ipv4 stack: %+v", v4)
+	}
+	fallback := assembleWithAddrs(user, []models.Inbound{inbound("fb", "ipv6", "vless")}, creds, map[string]bool{"fb": true}, map[string]nodeAddr{"node-1": {IPv4: "203.0.113.9"}}, nil)
+	if len(fallback) != 1 || fallback[0].Host != "203.0.113.9" {
+		t.Fatalf("ipv6 stack without ipv6 falls back: %+v", fallback)
+	}
+	mixed := assembleWithAddrs(user, []models.Inbound{
+		inbound("a", "ipv4", "vless"),
+		inbound("b", "ipv6", "shadowsocks"),
+	}, creds, map[string]bool{"a": true, "b": true}, addrs, nil)
+	if len(mixed) != 2 || mixed[0].Host != "203.0.113.9" || mixed[1].Host != "2001:db8::1" {
+		t.Fatalf("same node both stacks: %+v", mixed)
+	}
+}
+
 func TestTCPRealityShareOmitsOtherTransportDefaults(t *testing.T) {
 	in := models.Inbound{
 		ID: "n", NodeUUID: "node-1", Name: "US_02", Protocol: "vless",

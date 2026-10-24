@@ -9,12 +9,17 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 
 本项目基于 [komari-monitor/komari](https://github.com/komari-monitor/komari) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时提供流量管理、成本中心、备份迁移、接入安全与适配电脑和手机的管理界面。
 
-**当前正式版：Lite-Plus [`0.0.1`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.1) · 配套 Agent [`0.0.0.4`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.0.4) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
+**当前正式版：Lite-Plus [`0.0.2`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.2) · 配套 Agent [`0.0.0.4`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.0.4) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
 
 [使用手册](https://nuomiiiii.github.io/Lite-document/) · [快速开始](#快速开始) · [功能概览](#功能概览) · [升级说明](#从旧版本升级) · [Agent](#agent-与远程管理) · [MCP 代理](#mcp-代理与-ai-授权) · [完整更新日志](https://github.com/nuomiiiii/Lite-Plus/releases)
 
 > [!WARNING]
 > Lite 只能部署在你拥有或已获得授权管理的设备上。请勿将其用于未经授权的访问、持久化、命令执行或其他滥用行为。管理员应启用 HTTPS 与双因素认证，并妥善保护 Agent Token 和备份文件。
+
+## 0.0.2
+
+- 修复新增/删除用户入站分配卡顿bug。
+- 仅 IPv6 / 双栈 + 节点地址时，订阅用该节点 IPv6 拼订阅地址；仅 IPv4 仍用 IPv4；已签发证书域名仍然优先。
 
 ## 0.0.1 稳定版能力摘要
 

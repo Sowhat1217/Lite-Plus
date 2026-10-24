@@ -79,9 +79,12 @@ func (s *Service) Assign(actor, userID, planID, operationID string, now time.Tim
 			return err
 		}
 		_ = inner.Audit(actor, "nodemgt.assign", user.ID, plan.ID)
-		return enqueueUserSync(inner, user.ID, "applyConfig", operationID)
+		return nil
 	})
 	if err != nil {
+		return nil, err
+	}
+	if err := enqueueUserSync(s.Store, user.ID, "applyConfig", operationID); err != nil {
 		return nil, err
 	}
 	return asg, nil
@@ -165,7 +168,7 @@ func (s *Service) Unassign(actor, userID, operationID string) error {
 		return err
 	}
 	operationID = ensureOpID(operationID)
-	return s.Store.DB().Transaction(func(tx *gorm.DB) error {
+	err := s.Store.DB().Transaction(func(tx *gorm.DB) error {
 		inner := store.New(tx)
 		if err := inner.DeleteAssignments(userID); err != nil {
 			return err
@@ -177,8 +180,12 @@ func (s *Service) Unassign(actor, userID, operationID string) error {
 			return err
 		}
 		_ = inner.Audit(actor, "nodemgt.unassign", userID, "")
-		return enqueueUserSync(inner, userID, "applyConfig", operationID)
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+	return enqueueUserSync(s.Store, userID, "applyConfig", operationID)
 }
 
 func (s *Service) UnassignPlan(actor, planID, operationID string) ([]string, error) {

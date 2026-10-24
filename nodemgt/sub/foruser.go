@@ -29,11 +29,11 @@ func ForUser(st *store.Store, user models.NodeUser) ([]Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	return AssembleWithCerts(user, inbounds, creds, granted, nodeShareHosts(inbounds, granted), certs), nil
+	return assembleWithAddrs(user, inbounds, creds, granted, nodeShareAddrs(inbounds, granted), certs), nil
 }
 
-func nodeShareHosts(inbounds []models.Inbound, granted map[string]bool) map[string]string {
-	hosts := map[string]string{}
+func nodeShareAddrs(inbounds []models.Inbound, granted map[string]bool) map[string]nodeAddr {
+	hosts := map[string]nodeAddr{}
 	for _, in := range inbounds {
 		if granted != nil && !granted[in.ID] {
 			continue
@@ -45,12 +45,12 @@ func nodeShareHosts(inbounds []models.Inbound, granted map[string]bool) map[stri
 		if err != nil {
 			continue
 		}
-		host := strings.TrimSpace(client.IPv4)
-		if host == "" {
-			host = strings.TrimSpace(client.IPv6)
+		addrs := nodeAddr{
+			IPv4: strings.TrimSpace(client.IPv4),
+			IPv6: strings.TrimSpace(client.IPv6),
 		}
-		if host != "" {
-			hosts[in.NodeUUID] = host
+		if addrs.IPv4 != "" || addrs.IPv6 != "" {
+			hosts[in.NodeUUID] = addrs
 		}
 	}
 	return hosts

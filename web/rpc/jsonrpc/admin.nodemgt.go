@@ -17,10 +17,12 @@ import (
 	"github.com/nuomiiiii/lite/nodemgt/inboundcfg"
 	"github.com/nuomiiiii/lite/nodemgt/models"
 	"github.com/nuomiiiii/lite/nodemgt/ops"
+	"github.com/nuomiiiii/lite/nodemgt/secretcrypt"
 	"github.com/nuomiiiii/lite/nodemgt/store"
 	"github.com/nuomiiiii/lite/nodemgt/sub"
 	"github.com/nuomiiiii/lite/nodemgt/subhttp"
 	"github.com/nuomiiiii/lite/pkg/rpc"
+	logger "github.com/nuomiiiii/lite/utils/log"
 )
 
 func init() {
@@ -103,15 +105,12 @@ func nodemgtActorName(id string) string {
 }
 
 func nodemgtPush(st *store.Store, nodeUUID string) {
-	if nodeUUID == "" {
-		return
-	}
-	_ = control.EnqueueApplyConfig(st, nodeUUID)
-	_ = control.PushPending(st, nodeUUID)
+	nodemgtPushNodes(st, nodeUUID)
 }
 
-func nodemgtPushNodes(st *store.Store, nodeUUIDs ...string) {
+func nodemgtPushNodes(_ *store.Store, nodeUUIDs ...string) {
 	seen := map[string]struct{}{}
+	ids := make([]string, 0, len(nodeUUIDs))
 	for _, id := range nodeUUIDs {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -121,8 +120,32 @@ func nodemgtPushNodes(st *store.Store, nodeUUIDs ...string) {
 			continue
 		}
 		seen[id] = struct{}{}
-		nodemgtPush(st, id)
+		ids = append(ids, id)
 	}
+	if len(ids) == 0 {
+		return
+	}
+	go pushNodemgtPending(append([]string(nil), ids...))
+}
+
+func pushNodemgtPending(nodeUUIDs []string) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			logger.Errorf("nodemgt", "push pending: %v", rec)
+		}
+	}()
+	st := store.New(dbcore.GetDBInstance())
+	for _, id := range nodeUUIDs {
+		if err := control.EnqueueApplyConfig(st, id); err != nil {
+			logger.Warnf("nodemgt", "enqueue apply %s: %v", id, err)
+			continue
+		}
+		_ = control.PushPending(st, id)
+	}
+}
+
+func nodemgtShouldClearPlan(planID string, hadPlan bool) bool {
+	return strings.TrimSpace(planID) == "" && hadPlan
 }
 
 func nodemgtPushUser(st *store.Store, userID string) {
@@ -780,7 +803,7 @@ func nodemgtUserList(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.Json
 	}
 	_ = req.BindParams(&p)
 	if _, err := nodemgtOps().SyncDueTrafficResets(time.Now().UTC()); err != nil {
-		return nil, nodemgtErr(err)
+		logger.Warnf("nodemgt", "traffic reset sync: %v", err)
 	}
 	rows, err := nodemgtST().ListUserViews(p.NodeUUID)
 	if err != nil {
@@ -800,7 +823,14 @@ func nodemgtUserUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.
 		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
 	}
 	st := nodemgtST()
+	isNew := strings.TrimSpace(p.ID) == ""
 	before, _ := st.NodeIDsForUser(p.ID)
+	hadPlan := false
+	if !isNew {
+		if asg, err := st.ListAssignments(p.ID); err == nil {
+			hadPlan = len(asg) > 0
+		}
+	}
 	if len(p.InboundIDs) > 0 {
 		in, err := st.ListInbounds("")
 		if err != nil {
@@ -833,7 +863,7 @@ func nodemgtUserUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.
 				return nil, nodemgtErr(err)
 			}
 		}
-	} else if p.ID != "" {
+	} else if nodemgtShouldClearPlan(planID, hadPlan) {
 		if err := nodemgtOps().Unassign(nodemgtActor(ctx), p.ID, ""); err != nil {
 			return nil, nodemgtErr(err)
 		}
@@ -845,9 +875,6 @@ func nodemgtUserUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.
 	if err := st.SetUserExpiryAndReset(p.ID, p.ExpiresAt, resetDay, time.Now().UTC()); err != nil {
 		return nil, nodemgtErr(err)
 	}
-	if _, err := nodemgtOps().SyncDueTrafficResets(time.Now().UTC()); err != nil {
-		return nil, nodemgtErr(err)
-	}
 	if _, err := st.EnsureSubscription(p.ID); err != nil {
 		return nil, nodemgtErr(err)
 	}
@@ -856,19 +883,25 @@ func nodemgtUserUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.
 			return nil, nodemgtErr(err)
 		}
 	}
+	issuedSecret := ""
+	if isNew {
+		_, secret, err := st.IssueCredential(p.ID, "uuid", "", nil)
+		if err != nil {
+			return nil, nodemgtErr(err)
+		}
+		issuedSecret = secret
+	}
 	_ = st.Audit(nodemgtActor(ctx), "nodemgt.user.upsert", p.ID, p.Username)
 	after, _ := st.NodeIDsForUser(p.ID)
 	nodemgtPushNodes(st, append(append([]string{}, before...), after...)...)
-	views, err := st.ListUserViews("")
+	view, err := st.GetUserView(p.ID)
 	if err != nil {
-		return p.NodeUser, nil
+		return map[string]any{"id": p.ID, "secret": issuedSecret}, nil
 	}
-	for _, view := range views {
-		if view.ID == p.ID {
-			return view, nil
-		}
-	}
-	return p.NodeUser, nil
+	return struct {
+		store.UserView
+		Secret string `json:"secret,omitempty"`
+	}{UserView: *view, Secret: issuedSecret}, nil
 }
 
 func nodemgtUserClearIPs(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
@@ -935,12 +968,31 @@ func nodemgtCredentialIssue(ctx context.Context, req *rpc.JsonRpcRequest) (any, 
 		Secret string `json:"secret"`
 	}
 	_ = req.BindParams(&p)
-	cred, secret, err := nodemgtST().IssueCredential(p.UserID, p.Kind, p.Secret, nil)
+	st := nodemgtST()
+	kind := strings.TrimSpace(p.Kind)
+	if kind == "" {
+		kind = "uuid"
+	}
+	if strings.TrimSpace(p.Secret) == "" {
+		if creds, err := st.ListCredentials(p.UserID); err == nil {
+			for _, cred := range creds {
+				if !cred.Enabled || !strings.EqualFold(cred.Kind, kind) {
+					continue
+				}
+				plain, openErr := secretcrypt.Open(cred.SecretMaterial)
+				if openErr != nil || strings.TrimSpace(plain) == "" {
+					continue
+				}
+				return map[string]any{"credential": cred, "secret": plain}, nil
+			}
+		}
+	}
+	cred, secret, err := st.IssueCredential(p.UserID, kind, p.Secret, nil)
 	if err != nil {
 		return nil, nodemgtErr(err)
 	}
-	_ = nodemgtST().Audit(nodemgtActor(ctx), "nodemgt.credential.issue", cred.ID, p.UserID)
-	nodemgtPushUser(nodemgtST(), p.UserID)
+	_ = st.Audit(nodemgtActor(ctx), "nodemgt.credential.issue", cred.ID, p.UserID)
+	nodemgtPushUser(st, p.UserID)
 	return map[string]any{"credential": cred, "secret": secret}, nil
 }
 

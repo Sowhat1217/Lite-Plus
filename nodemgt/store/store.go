@@ -590,6 +590,25 @@ func (s *Store) ListUserViews(nodeUUID string) ([]UserView, error) {
 	if err != nil {
 		return nil, err
 	}
+	return s.userViews(users)
+}
+
+func (s *Store) GetUserView(id string) (*UserView, error) {
+	user, err := s.GetUser(id)
+	if err != nil {
+		return nil, err
+	}
+	views, err := s.userViews([]models.NodeUser{*user})
+	if err != nil {
+		return nil, err
+	}
+	if len(views) == 0 {
+		return nil, ErrNotFound
+	}
+	return &views[0], nil
+}
+
+func (s *Store) userViews(users []models.NodeUser) ([]UserView, error) {
 	inbounds, err := s.ListInbounds("")
 	if err != nil {
 		return nil, err
@@ -1342,7 +1361,7 @@ func (s *Store) MarkCommandSent(operationID string) error {
 
 func (s *Store) LatestCommands() ([]models.ControlCommand, error) {
 	var rows []models.ControlCommand
-	if err := s.db.Order("created_at DESC, rowid DESC").Find(&rows).Error; err != nil {
+	if err := s.db.Omit("PayloadJSON").Order("created_at DESC, rowid DESC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}

@@ -603,6 +603,7 @@ func TestMarkCommandSentAndLatest(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, latest, 1)
 	require.Equal(t, "op-b", latest[0].OperationID)
+	require.Empty(t, latest[0].PayloadJSON)
 	require.NoError(t, st.AckCommand("op-a", models.CmdApplied, ""))
 	latest, err = st.LatestCommands()
 	require.NoError(t, err)
@@ -687,4 +688,21 @@ func TestUserExtraLinksPersistDisabled(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.False(t, rows[0].Enabled)
 	require.Equal(t, id, rows[0].ID)
+}
+
+func TestGetUserViewMatchesList(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "view-one"}
+	require.NoError(t, st.UpsertUser(user))
+	in := &models.Inbound{NodeUUID: "n1", Name: "in-a", Protocol: "vless", Listen: "0.0.0.0", Port: 443}
+	require.NoError(t, st.UpsertInbound(in))
+	require.NoError(t, st.ReplaceGrants(user.ID, []string{in.ID}))
+	got, err := st.GetUserView(user.ID)
+	require.NoError(t, err)
+	views, err := st.ListUserViews("")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Equal(t, views[0].ID, got.ID)
+	require.Equal(t, views[0].InboundIDs, got.InboundIDs)
+	require.Equal(t, views[0].InboundNames, got.InboundNames)
 }

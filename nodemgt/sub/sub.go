@@ -59,6 +59,50 @@ func UserNodes(user models.NodeUser, inbounds []models.Inbound, creds []models.C
 	return Assemble(user, inbounds, creds, nil, nil)
 }
 
+type nodeAddr struct {
+	IPv4 string
+	IPv6 string
+}
+
+func parseNodeHost(raw string) nodeAddr {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nodeAddr{}
+	}
+	if ip := net.ParseIP(raw); ip != nil && ip.To4() == nil {
+		return nodeAddr{IPv6: raw}
+	}
+	return nodeAddr{IPv4: raw}
+}
+
+func stringHosts(hosts map[string]string) map[string]nodeAddr {
+	if hosts == nil {
+		return nil
+	}
+	out := make(map[string]nodeAddr, len(hosts))
+	for id, host := range hosts {
+		out[id] = parseNodeHost(host)
+	}
+	return out
+}
+
+func (a nodeAddr) forStack(stack string) string {
+	v4 := strings.TrimSpace(a.IPv4)
+	v6 := strings.TrimSpace(a.IPv6)
+	switch strings.ToLower(strings.TrimSpace(stack)) {
+	case "ipv4":
+		if v4 != "" {
+			return v4
+		}
+		return v6
+	default:
+		if v6 != "" {
+			return v6
+		}
+		return v4
+	}
+}
+
 func Assemble(user models.NodeUser, inbounds []models.Inbound, creds []models.Credential, granted map[string]bool, nodeHosts map[string]string) []Node {
 	return AssembleWithCerts(user, inbounds, creds, granted, nodeHosts, nil)
 }
@@ -103,6 +147,10 @@ func (idx certDomainIndex) domainFor(nodeUUID, certID string) string {
 }
 
 func AssembleWithCerts(user models.NodeUser, inbounds []models.Inbound, creds []models.Credential, granted map[string]bool, nodeHosts map[string]string, certs []models.Certificate) []Node {
+	return assembleWithAddrs(user, inbounds, creds, granted, stringHosts(nodeHosts), certs)
+}
+
+func assembleWithAddrs(user models.NodeUser, inbounds []models.Inbound, creds []models.Credential, granted map[string]bool, nodeHosts map[string]nodeAddr, certs []models.Certificate) []Node {
 	var uuid, password string
 	now := time.Now().UTC()
 	for _, c := range creds {
@@ -143,11 +191,11 @@ func AssembleWithCerts(user models.NodeUser, inbounds []models.Inbound, creds []
 			continue
 		}
 		cfg := inboundcfg.Parse(in.SettingsJSON)
-		hostHint := ""
+		var addrs nodeAddr
 		if nodeHosts != nil {
-			hostHint = nodeHosts[in.NodeUUID]
+			addrs = nodeHosts[in.NodeUUID]
 		}
-		host, port, ok := shareAddress(in, cfg, hostHint, certDomains)
+		host, port, ok := shareAddress(in, cfg, addrs, certDomains)
 		if !ok {
 			continue
 		}
@@ -241,7 +289,7 @@ func shareName(user models.NodeUser, in models.Inbound) string {
 	return userName + "-" + name
 }
 
-func shareAddress(in models.Inbound, cfg inboundcfg.Settings, nodeHost string, certs certDomainIndex) (string, int, bool) {
+func shareAddress(in models.Inbound, cfg inboundcfg.Settings, addrs nodeAddr, certs certDomainIndex) (string, int, bool) {
 	strategy := inboundcfg.NormalizeShareStrategy(cfg.ShareStrategy)
 	if cfg.ExcludeFromSub {
 		strategy = "none"
@@ -258,7 +306,7 @@ func shareAddress(in models.Inbound, cfg inboundcfg.Settings, nodeHost string, c
 	default:
 		host = certs.domainFor(in.NodeUUID, cfg.CertID)
 		if host == "" {
-			host = strings.TrimSpace(nodeHost)
+			host = addrs.forStack(cfg.Stack)
 		}
 	}
 	port := in.Port
