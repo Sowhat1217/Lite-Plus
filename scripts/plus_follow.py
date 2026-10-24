@@ -154,25 +154,21 @@ def git_show_stage(repo: pathlib.Path, stage: int, name: str) -> str | None:
 
 def merge_json_value(base, ours, theirs):
     if isinstance(ours, dict) and isinstance(theirs, dict):
-        base_d = base if isinstance(base, dict) else {}
         out: dict = {}
         for key in ours:
-            out[key] = merge_json_value(base_d.get(key, MISSING), ours[key], theirs.get(key, MISSING))
+            ours_val = ours[key]
+            theirs_val = theirs.get(key, MISSING)
+            if isinstance(ours_val, dict) and isinstance(theirs_val, dict):
+                out[key] = merge_json_value(MISSING, ours_val, theirs_val)
+            else:
+                out[key] = ours_val
         for key in theirs:
-            if key in ours:
-                continue
-            base_val = base_d.get(key, MISSING)
-            their_val = theirs[key]
-            if base_val is MISSING or their_val != base_val:
-                out[key] = their_val
+            if key not in ours:
+                out[key] = theirs[key]
         return out
     if theirs is MISSING:
         return ours
     if ours is MISSING:
-        return theirs
-    if ours == theirs:
-        return ours
-    if ours == base:
         return theirs
     return ours
 

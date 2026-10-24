@@ -190,7 +190,7 @@ jobs:
           (
             cd "$WEB_DIR"
             npm ci --no-audit --no-fund
-            npm test
+            TZ=Asia/Shanghai npm test
           )
 
           set +e

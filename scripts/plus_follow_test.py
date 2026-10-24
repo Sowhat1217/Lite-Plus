@@ -112,7 +112,7 @@ class PlusFollowTests(unittest.TestCase):
         theirs = {"a": "1", "b": "lite", "d": "lite-only", "nested": {"x": "old", "y": "new"}}
         merged = plus_follow.merge_json_value(base, ours, theirs)
         self.assertEqual(merged["a"], "plus")
-        self.assertEqual(merged["b"], "lite")
+        self.assertEqual(merged["b"], "2")
         self.assertEqual(merged["c"], "plus-only")
         self.assertEqual(merged["d"], "lite-only")
         self.assertEqual(merged["nested"]["y"], "new")
