@@ -7,6 +7,7 @@ install-lite.sh
 scripts/test-install-upgrade.sh
 Dockerfile
 README.md
+database/tasks/return_route_bgp_prefixes.json
 cmd/server.go
 cmd/version.go
 database/accounts/2fa.go

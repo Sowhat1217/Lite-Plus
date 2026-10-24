@@ -165,9 +165,9 @@ jobs:
             local remote_repo="$2"
             local body="$3"
             local branch="follow/lite-$TAG"
-            git -C "$repo_dir" checkout -B "$branch"
             git -C "$repo_dir" add -A
             git -C "$repo_dir" commit -m "follow: Lite ${TAG} (needs review)" || true
+            git -C "$repo_dir" checkout -B "$branch"
             git -C "$repo_dir" push -u "https://x-access-token:${PLUS_FOLLOW_TOKEN}@github.com/${remote_repo}.git" "$branch"
             gh pr create --repo "$remote_repo" --base main --head "$branch" --title "Follow Lite $TAG" --body "$body" || true
           }

@@ -26,6 +26,10 @@ class PlusFollowTests(unittest.TestCase):
         self.assertIn("src/utils/agentInstall.ts", ours)
         self.assertIn("tests/agentInstall.test.ts", ours)
 
+    def test_ours_keeps_plus_bgp_table(self) -> None:
+        server = (pathlib.Path(__file__).resolve().parent / "follow-ours-server.txt").read_text(encoding="utf-8")
+        self.assertIn("database/tasks/return_route_bgp_prefixes.json", server)
+
     def test_c_class_covers_i18n_and_mcp(self) -> None:
         web = (pathlib.Path(__file__).resolve().parent / "follow-c-web.txt").read_text(encoding="utf-8")
         server = (pathlib.Path(__file__).resolve().parent / "follow-c-server.txt").read_text(encoding="utf-8")
