@@ -302,6 +302,9 @@ func TestCustomHTMLIsLimitedToPublicPages(t *testing.T) {
 	router := gin.New()
 	Static(router.Group("/"), router.NoRoute)
 
+	_, systemUIErr := fs.ReadFile(PublicFS, "systemUI/dist/index.html")
+	hasSystemUI := systemUIErr == nil
+
 	tests := []struct {
 		path       string
 		wantCustom bool
@@ -318,6 +321,9 @@ func TestCustomHTMLIsLimitedToPublicPages(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		if isPrivateApplicationPath(tt.path) && !hasSystemUI {
+			continue
+		}
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, tt.path, nil)
 		router.ServeHTTP(recorder, request)
