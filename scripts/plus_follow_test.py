@@ -106,6 +106,19 @@ class PlusFollowTests(unittest.TestCase):
         self.assertRegex(value, r"[a-z]")
         self.assertRegex(value, r"[0-9]")
 
+    def test_merge_json_keeps_plus_and_takes_lite_additions(self) -> None:
+        base = {"a": "1", "b": "2", "nested": {"x": "old"}}
+        ours = {"a": "plus", "b": "2", "c": "plus-only", "nested": {"x": "old"}}
+        theirs = {"a": "1", "b": "lite", "d": "lite-only", "nested": {"x": "old", "y": "new"}}
+        merged = plus_follow.merge_json_value(base, ours, theirs)
+        self.assertEqual(merged["a"], "plus")
+        self.assertEqual(merged["b"], "lite")
+        self.assertEqual(merged["c"], "plus-only")
+        self.assertEqual(merged["d"], "lite-only")
+        self.assertEqual(merged["nested"]["y"], "new")
+        both = plus_follow.merge_json_value({"k": "old"}, {"k": "plus"}, {"k": "lite"})
+        self.assertEqual(both["k"], "plus")
+
 
 if __name__ == "__main__":
     unittest.main()

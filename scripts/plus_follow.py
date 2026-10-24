@@ -136,6 +136,66 @@ def unmerged_files(repo: pathlib.Path) -> list[str]:
     return [line.strip().replace("\\", "/") for line in out.splitlines() if line.strip()]
 
 
+MISSING = object()
+
+
+def git_show_stage(repo: pathlib.Path, stage: int, name: str) -> str | None:
+    result = subprocess.run(
+        ["git", "show", f":{stage}:{name}"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def merge_json_value(base, ours, theirs):
+    if isinstance(ours, dict) and isinstance(theirs, dict):
+        base_d = base if isinstance(base, dict) else {}
+        out: dict = {}
+        for key in ours:
+            out[key] = merge_json_value(base_d.get(key, MISSING), ours[key], theirs.get(key, MISSING))
+        for key in theirs:
+            if key in ours:
+                continue
+            base_val = base_d.get(key, MISSING)
+            their_val = theirs[key]
+            if base_val is MISSING or their_val != base_val:
+                out[key] = their_val
+        return out
+    if theirs is MISSING:
+        return ours
+    if ours is MISSING:
+        return theirs
+    if ours == theirs:
+        return ours
+    if ours == base:
+        return theirs
+    return ours
+
+
+def merge_conflict_json(repo: pathlib.Path, name: str) -> bool:
+    ours_text = git_show_stage(repo, 2, name)
+    theirs_text = git_show_stage(repo, 3, name)
+    if ours_text is None or theirs_text is None:
+        return False
+    base_text = git_show_stage(repo, 1, name)
+    try:
+        ours = json.loads(ours_text)
+        theirs = json.loads(theirs_text)
+        base = json.loads(base_text) if base_text else {}
+    except json.JSONDecodeError:
+        return False
+    merged = merge_json_value(base, ours, theirs)
+    path = repo / pathlib.Path(*name.split("/"))
+    path.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    subprocess.check_call(["git", "add", "--", name], cwd=repo)
+    return True
+
+
 def apply_ours(repo: pathlib.Path, ours_file: pathlib.Path, c_file: pathlib.Path) -> str:
     ours = load_list(ours_file)
     c_files = load_list(c_file)
@@ -144,6 +204,10 @@ def apply_ours(repo: pathlib.Path, ours_file: pathlib.Path, c_file: pathlib.Path
         if name in ours:
             subprocess.check_call(["git", "checkout", "--ours", "--", name], cwd=repo)
             subprocess.check_call(["git", "add", "--", name], cwd=repo)
+    remaining = unmerged_files(repo)
+    for name in remaining:
+        if name in c_files and name.endswith(".json") and merge_conflict_json(repo, name):
+            continue
     remaining = unmerged_files(repo)
     if not remaining:
         return "ok"
