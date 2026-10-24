@@ -486,6 +486,9 @@ func (s *Store) DeleteUser(id string) error {
 		if err := tx.Where("user_id = ?", id).Delete(&models.Assignment{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("scope = ? AND scope_id IN (?)", "subscription", tx.Model(&models.Subscription{}).Select("id").Where("user_id = ?", id)).Delete(&models.SubscriptionTemplateBinding{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("user_id = ?", id).Delete(&models.Subscription{}).Error; err != nil {
 			return err
 		}
@@ -541,12 +544,12 @@ type UserPresence struct {
 
 type UserView struct {
 	models.NodeUser
-	PlanID           string       `json:"plan_id"`
-	PlanName         string       `json:"plan_name"`
-	UUID             string       `json:"uuid"`
-	InboundIDs       []string     `json:"inbound_ids"`
-	InboundNames     []string     `json:"inbound_names"`
-	AssignmentEndsAt *time.Time   `json:"assignment_ends_at"`
+	PlanID           string                 `json:"plan_id"`
+	PlanName         string                 `json:"plan_name"`
+	UUID             string                 `json:"uuid"`
+	InboundIDs       []string               `json:"inbound_ids"`
+	InboundNames     []string               `json:"inbound_names"`
+	AssignmentEndsAt *time.Time             `json:"assignment_ends_at"`
 	Online           bool                   `json:"online"`
 	OnlineIPs        []UserIPView           `json:"online_ips"`
 	ExtraLinks       []models.UserExtraLink `json:"extra_links"`
@@ -1040,14 +1043,19 @@ func (s *Store) UpsertPlan(row *models.Plan) error {
 }
 
 func (s *Store) DeletePlan(id string) error {
-	res := s.db.Delete(&models.Plan{}, "id = ?", id)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("scope = ? AND scope_id = ?", "plan", id).Delete(&models.SubscriptionTemplateBinding{}).Error; err != nil {
+			return err
+		}
+		res := tx.Delete(&models.Plan{}, "id = ?", id)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }
 
 func (s *Store) FindAssignmentByOp(opID string) (*models.Assignment, error) {
@@ -1190,6 +1198,15 @@ func revealSubscription(row *models.Subscription) {
 }
 
 func (s *Store) UpsertSubscription(row *models.Subscription) error {
+	if row.ID != "" && row.Token == "" {
+		var old models.Subscription
+		if err := s.db.First(&old, "id = ?", row.ID).Error; err != nil {
+			return err
+		}
+		revealSubscription(&old)
+		row.Token = old.Token
+		row.CreatedAt = old.CreatedAt
+	}
 	if row.ID == "" {
 		row.ID = newID()
 	}
@@ -1227,14 +1244,19 @@ func (s *Store) UpsertSubscription(row *models.Subscription) error {
 }
 
 func (s *Store) DeleteSubscription(id string) error {
-	res := s.db.Delete(&models.Subscription{}, "id = ?", id)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("scope = ? AND scope_id = ?", "subscription", id).Delete(&models.SubscriptionTemplateBinding{}).Error; err != nil {
+			return err
+		}
+		res := tx.Delete(&models.Subscription{}, "id = ?", id)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }
 
 func (s *Store) ListCerts(nodeUUID string) ([]models.Certificate, error) {

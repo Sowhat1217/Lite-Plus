@@ -3,7 +3,7 @@ package sub
 import (
 	"strings"
 
-	"github.com/nuomiiiii/lite/database/clients"
+	dbmodels "github.com/nuomiiiii/lite/database/models"
 	"github.com/nuomiiiii/lite/nodemgt/models"
 	"github.com/nuomiiiii/lite/nodemgt/store"
 )
@@ -29,10 +29,10 @@ func ForUser(st *store.Store, user models.NodeUser) ([]Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	return assembleWithAddrs(user, inbounds, creds, granted, nodeShareAddrs(inbounds, granted), certs), nil
+	return assembleWithAddrs(user, inbounds, creds, granted, nodeShareAddrs(st, inbounds, granted), certs), nil
 }
 
-func nodeShareAddrs(inbounds []models.Inbound, granted map[string]bool) map[string]nodeAddr {
+func nodeShareAddrs(st *store.Store, inbounds []models.Inbound, granted map[string]bool) map[string]nodeAddr {
 	hosts := map[string]nodeAddr{}
 	for _, in := range inbounds {
 		if granted != nil && !granted[in.ID] {
@@ -41,8 +41,8 @@ func nodeShareAddrs(inbounds []models.Inbound, granted map[string]bool) map[stri
 		if _, ok := hosts[in.NodeUUID]; ok {
 			continue
 		}
-		client, err := clients.GetClientByUUID(in.NodeUUID)
-		if err != nil {
+		var client dbmodels.Client
+		if err := st.DB().Select("ipv4", "ipv6").Where("uuid = ?", in.NodeUUID).First(&client).Error; err != nil {
 			continue
 		}
 		addrs := nodeAddr{
