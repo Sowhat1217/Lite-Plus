@@ -32,6 +32,7 @@ func Generate(st *store.Store, row models.Subscription, req GenerateRequest) (su
 		return empty, store.ErrUserDisabled
 	}
 	if user.ExpiresAt != nil && !user.ExpiresAt.After(time.Now().UTC()) {
+		_ = st.SetUserStatus(user.ID, models.UserExpired)
 		return empty, store.ErrUserExpired
 	}
 	selection, err := subtpl.ResolveTarget(req.Target, req.Format, req.UserAgent, row.Format, row.AutoDetect)
@@ -43,9 +44,13 @@ func Generate(st *store.Store, row models.Subscription, req GenerateRequest) (su
 		return empty, err
 	}
 	extra := ExpandedExtras(st, row.UserID, row.ExtraURLs)
-	if selection.Client == "v2ray" {
-		body, ctype, err := sub.Render("xray", nodes, extra)
-		return subtpl.Document{Body: body, ContentType: ctype, Client: "v2ray", Warnings: []string{}}, err
+	if req.Template == nil && (selection.Client == "v2ray" || selection.LegacyFormat != "") {
+		format := selection.LegacyFormat
+		if format == "" {
+			format = "xray"
+		}
+		body, ctype, err := sub.Render(format, nodes, extra)
+		return subtpl.Document{Body: body, ContentType: ctype, Client: selection.Client, Warnings: []string{}}, err
 	}
 	tpl := req.Template
 	if tpl == nil {
@@ -53,10 +58,6 @@ func Generate(st *store.Store, row models.Subscription, req GenerateRequest) (su
 		if err != nil {
 			return empty, err
 		}
-	}
-	if tpl == nil && selection.LegacyFormat != "" {
-		body, ctype, err := sub.Render(selection.LegacyFormat, nodes, extra)
-		return subtpl.Document{Body: body, ContentType: ctype, Client: selection.Client, Warnings: []string{}}, err
 	}
 	kind := store.TemplateKindForClient(selection.Client)
 	if tpl == nil {

@@ -3,6 +3,7 @@ package subhttp
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/nuomiiiii/lite/database/dbcore"
 	"github.com/nuomiiiii/lite/nodemgt/store"
 	"github.com/nuomiiiii/lite/nodemgt/sub"
+	"github.com/nuomiiiii/lite/utils/httpsserver"
 )
 
 type Config struct {
@@ -22,6 +24,98 @@ type Config struct {
 	PublicPort int
 	Path       string
 	PublicHost string
+	Domain     string
+	CertPath   string
+	KeyPath    string
+	ReuseHTTPS bool
+}
+
+func (cfg Config) TLS() bool {
+	return strings.TrimSpace(cfg.CertPath) != "" && strings.TrimSpace(cfg.KeyPath) != ""
+}
+
+func (cfg Config) shareHost() string {
+	if domain := strings.TrimSpace(cfg.Domain); domain != "" {
+		return domain
+	}
+	return strings.TrimSpace(cfg.PublicHost)
+}
+
+func (cfg Config) ValidateTLS() error {
+	certPath := strings.TrimSpace(cfg.CertPath)
+	keyPath := strings.TrimSpace(cfg.KeyPath)
+	if cfg.ReuseHTTPS && (certPath == "" || keyPath == "") {
+		return fmt.Errorf("built-in https certificate required")
+	}
+	if certPath == "" && keyPath == "" {
+		return nil
+	}
+	if certPath == "" || keyPath == "" {
+		return fmt.Errorf("subscription certificate and private key paths are required")
+	}
+	if _, err := tls.LoadX509KeyPair(certPath, keyPath); err != nil {
+		return fmt.Errorf("subscription certificate: %w", err)
+	}
+	return nil
+}
+
+func settingOn(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+func PanelCertificate() (certPath, keyPath string, domains []string) {
+	settings, err := httpsserver.LoadSettings()
+	if err != nil {
+		return "", "", []string{}
+	}
+	certPath = strings.TrimSpace(settings.CertificatePath)
+	keyPath = strings.TrimSpace(settings.PrivateKeyPath)
+	if certPath != "" {
+		if names, err := httpsserver.CertificateDomains(certPath); err == nil {
+			domains = names
+		}
+	}
+	if domains == nil {
+		domains = []string{}
+	}
+	return certPath, keyPath, domains
+}
+
+func applyPanelHTTPS(cfg *Config, reuse bool, certPath, keyPath string, domains []string) {
+	cfg.ReuseHTTPS = reuse
+	if !reuse {
+		cfg.CertPath = ""
+		cfg.KeyPath = ""
+		cfg.Domain = ""
+		return
+	}
+	cfg.CertPath = strings.TrimSpace(certPath)
+	cfg.KeyPath = strings.TrimSpace(keyPath)
+	if domain := FirstShareDomain(domains); domain != "" {
+		cfg.Domain = domain
+	}
+}
+
+func FirstShareDomain(domains []string) string {
+	var wildcard string
+	for _, domain := range domains {
+		domain = strings.TrimSpace(domain)
+		if domain == "" || strings.EqualFold(domain, "localhost") {
+			continue
+		}
+		if strings.HasPrefix(domain, "*.") {
+			if wildcard == "" {
+				wildcard = strings.TrimPrefix(domain, "*.")
+			}
+			continue
+		}
+		return domain
+	}
+	return wildcard
 }
 
 var (
@@ -69,16 +163,22 @@ func PublicURL(cfg Config, token string) string {
 		return ""
 	}
 	path := NormalizePath(cfg.Path) + token
-	host := strings.TrimSpace(cfg.PublicHost)
+	host := cfg.shareHost()
 	if host == "" {
 		return path
 	}
 	scheme := "http"
+	if cfg.TLS() {
+		scheme = "https"
+	}
 	switch {
 	case strings.HasPrefix(strings.ToLower(host), "https://"):
 		scheme = "https"
 		host = host[len("https://"):]
 	case strings.HasPrefix(strings.ToLower(host), "http://"):
+		if !cfg.TLS() {
+			scheme = "http"
+		}
 		host = host[len("http://"):]
 	}
 	host = strings.TrimSuffix(host, "/")
@@ -108,12 +208,26 @@ func LoadConfig(st *store.Store) (Config, error) {
 	publicRaw, _ := st.GetSetting("sub_public_port")
 	publicPort, _ := strconv.Atoi(strings.TrimSpace(publicRaw))
 	host, _ := st.GetSetting("sub_public_host")
-	return Config{
+	reuseRaw, _ := st.GetSetting("sub_reuse_https")
+	legacyCert, _ := st.GetSetting("sub_cert_path")
+	legacyKey, _ := st.GetSetting("sub_key_path")
+	reuse := settingOn(reuseRaw) || (strings.TrimSpace(legacyCert) != "" && strings.TrimSpace(legacyKey) != "")
+	panelCert, panelKey, panelDomains := PanelCertificate()
+	cfg := Config{
 		ListenPort: port,
 		PublicPort: publicPort,
 		Path:       path,
 		PublicHost: strings.TrimSpace(host),
-	}, nil
+	}
+	applyPanelHTTPS(&cfg, reuse, panelCert, panelKey, panelDomains)
+	if cfg.ReuseHTTPS && cfg.Domain != "" && cfg.PublicHost == "" {
+		cfg.PublicHost = cfg.Domain
+	}
+	return cfg, nil
+}
+
+func Reload() error {
+	return Start()
 }
 
 func EnsurePath(st *store.Store) (string, error) {
@@ -204,6 +318,11 @@ func Start() error {
 }
 
 func Apply(cfg Config) error {
+	if cfg.ListenPort > 0 {
+		if err := cfg.ValidateTLS(); err != nil {
+			return err
+		}
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if err := stopLocked(context.Background()); err != nil {
@@ -235,7 +354,12 @@ func Apply(cfg Config) error {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		err := srv.ListenAndServe()
+		var err error
+		if cfg.TLS() {
+			err = srv.ListenAndServeTLS(cfg.CertPath, cfg.KeyPath)
+		} else {
+			err = srv.ListenAndServe()
+		}
 		if err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}

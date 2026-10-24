@@ -12,7 +12,7 @@ Enable **Identify client automatically** on a subscription to select the output 
 
 ## Requests and compatibility
 
-Append `?target=mihomo`, `clash`, `loon`, `surge`, `surge-mac`, `stash`, `sing-box`, or `v2ray` to an existing subscription URL. The token and path stay the same. Precedence is explicit `target`, explicit legacy `format`, automatic client detection (when enabled), then the stored format. The legacy `format=clash` and `format=sing-box` node-list outputs remain unchanged unless an administrator binds a corresponding template.
+Append `?target=mihomo`, `clash`, `loon`, `surge`, `surge-mac`, `stash`, `sing-box`, or `v2ray` to an existing subscription URL. The token and path stay the same. Precedence is explicit `target`, explicit legacy `format`, automatic client detection (when enabled), then the stored format. Stored `format=clash` and `format=sing-box` always keep the original node-list output. Full templates are used for `?target=` and automatic client detection.
 
 Clash/Mihomo templates use the shared V3 processor, including `include-all`, `filter`, `exclude-filter`, protocol filters and region groups. DNS, routing and rule-provider definitions remain part of the template. Native Loon/Surge templates replace `[Proxy]` using the appropriate producer, preserving other sections; Loon also generates `[Proxy Chain]` as needed. `__PROXY_NODES__` expands to the compatible authorized node names in native proxy groups. Native templates should use this marker or native regex selection rather than referring to sample nodes removed during import.
 

@@ -236,13 +236,12 @@ func completeCertFromCSR(ctx context.Context, st *store.Store, cmd models.Contro
 		issued, err = cert.IssueLocalTestCA(domain, csrPEM)
 	} else {
 		token, _ := st.GetSetting("cf_api_token")
-		zone, _ := st.GetSetting("cf_zone_id")
 		email, _ := st.GetSetting("acme_email")
 		issued, err = cert.IssueACME(ctx, cert.Request{
 			Domain: domain,
 			Email:  email,
 			CSRPEM: csrPEM,
-			CF:     cert.Cloudflare{APIToken: token, ZoneID: zone},
+			CF:     cert.Cloudflare{APIToken: token},
 		})
 	}
 	if err != nil {

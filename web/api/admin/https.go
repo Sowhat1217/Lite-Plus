@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nuomiiiii/lite/database/auditlog"
+	"github.com/nuomiiiii/lite/nodemgt/subhttp"
 	"github.com/nuomiiiii/lite/pkg/config"
 	"github.com/nuomiiiii/lite/utils/httpsserver"
 	"github.com/nuomiiiii/lite/web/api"
@@ -60,6 +61,7 @@ func UpdateHTTPSSettings(c *gin.Context) {
 		c.Header("Strict-Transport-Security", "max-age=0")
 		c.Header("Connection", "close")
 	}
+	_ = subhttp.Reload()
 	uuid, _ := c.Get("uuid")
 	auditlog.Event(c.ClientIP(), fmt.Sprint(uuid), "warn", "audit.https_update", nil)
 	api.RespondSuccess(c, gin.H{
@@ -75,6 +77,7 @@ func ReloadHTTPSCertificate(c *gin.Context) {
 		api.RespondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	_ = subhttp.Reload()
 	uuid, _ := c.Get("uuid")
 	auditlog.Event(c.ClientIP(), fmt.Sprint(uuid), "info", "audit.https_reload", nil)
 	api.RespondSuccess(c, gin.H{"status": httpsserver.Default.Status()})

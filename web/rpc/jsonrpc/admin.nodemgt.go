@@ -1220,7 +1220,9 @@ func nodemgtCertRequest(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc
 		if err := st.EnqueueCommand(cmd); err != nil {
 			return nil, nodemgtErr(err)
 		}
-		nodemgtPush(st, p.NodeUUID)
+		if err := control.PushPending(st, p.NodeUUID); err != nil {
+			return nil, nodemgtErr(err)
+		}
 		return row, nil
 	}
 	var issued *cert.Result
@@ -1229,13 +1231,12 @@ func nodemgtCertRequest(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc
 		issued, err = cert.IssueLocalTestCA(p.Domain, p.CSRPEM)
 	} else {
 		token, _ := st.GetSetting("cf_api_token")
-		zone, _ := st.GetSetting("cf_zone_id")
 		email, _ := st.GetSetting("acme_email")
 		issued, err = cert.IssueACME(ctx, cert.Request{
 			Domain: p.Domain,
 			Email:  email,
 			CSRPEM: p.CSRPEM,
-			CF:     cert.Cloudflare{APIToken: token, ZoneID: zone},
+			CF:     cert.Cloudflare{APIToken: token},
 		})
 	}
 	if err != nil {
@@ -1503,53 +1504,70 @@ func nodemgtDiagStatus(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.Js
 func nodemgtSettingsGet(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
 	st := nodemgtST()
 	token, _ := st.GetSetting("cf_api_token")
-	zone, _ := st.GetSetting("cf_zone_id")
 	email, _ := st.GetSetting("acme_email")
 	cfg, err := subhttp.LoadConfig(st)
 	if err != nil {
 		return nil, nodemgtErr(err)
 	}
+	httpsCert, httpsKey, httpsDomains := subhttp.PanelCertificate()
 	return map[string]any{
-		"cf_api_token_set": strings.TrimSpace(token) != "",
-		"cf_zone_id":       zone,
-		"acme_email":       email,
-		"sub_listen_port":  cfg.ListenPort,
-		"sub_public_port":  cfg.PublicPort,
-		"sub_path":         cfg.Path,
-		"sub_public_host":  cfg.PublicHost,
+		"cf_api_token_set":       strings.TrimSpace(token) != "",
+		"acme_email":             email,
+		"sub_listen_port":        cfg.ListenPort,
+		"sub_public_port":        cfg.PublicPort,
+		"sub_path":               cfg.Path,
+		"sub_public_host":        cfg.PublicHost,
+		"sub_domain":             cfg.Domain,
+		"sub_reuse_https":        cfg.ReuseHTTPS,
+		"https_certificate_path": httpsCert,
+		"https_private_key_path": httpsKey,
+		"https_domains":          httpsDomains,
 	}, nil
 }
 
 func nodemgtSettingsSet(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
 	var p struct {
 		CFAPIToken    string  `json:"cf_api_token"`
-		CFZoneID      *string `json:"cf_zone_id"`
+		ClearIssuer   *bool   `json:"clear_issuer"`
 		ACMEEmail     *string `json:"acme_email"`
 		SubListenPort *int    `json:"sub_listen_port"`
 		SubPublicPort *int    `json:"sub_public_port"`
 		SubPath       *string `json:"sub_path"`
 		SubPublicHost *string `json:"sub_public_host"`
+		SubReuseHTTPS *bool   `json:"sub_reuse_https"`
 	}
 	if err := req.BindParams(&p); err != nil {
 		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
 	}
 	st := nodemgtST()
-	if strings.TrimSpace(p.CFAPIToken) != "" {
-		if err := st.SetSetting("cf_api_token", strings.TrimSpace(p.CFAPIToken)); err != nil {
+	if p.ClearIssuer != nil && *p.ClearIssuer {
+		if err := st.DeleteSetting("cf_api_token"); err != nil {
 			return nil, nodemgtErr(err)
 		}
-	}
-	if p.CFZoneID != nil {
-		if err := st.SetSetting("cf_zone_id", strings.TrimSpace(*p.CFZoneID)); err != nil {
+		if err := st.DeleteSetting("acme_email"); err != nil {
 			return nil, nodemgtErr(err)
 		}
-	}
-	if p.ACMEEmail != nil {
-		if err := st.SetSetting("acme_email", strings.TrimSpace(*p.ACMEEmail)); err != nil {
-			return nil, nodemgtErr(err)
+	} else {
+		if token := strings.TrimSpace(p.CFAPIToken); token != "" {
+			if err := st.SetSetting("cf_api_token", token); err != nil {
+				return nil, nodemgtErr(err)
+			}
+		}
+		if p.ACMEEmail != nil {
+			email := strings.TrimSpace(*p.ACMEEmail)
+			if email == "" {
+				return nil, rpc.MakeError(rpc.InvalidParams, "acme email required", nil)
+			}
+			storedToken, _ := st.GetSetting("cf_api_token")
+			if strings.TrimSpace(storedToken) == "" {
+				return nil, rpc.MakeError(rpc.InvalidParams, "cloudflare api token required", nil)
+			}
+			if err := st.SetSetting("acme_email", email); err != nil {
+				return nil, nodemgtErr(err)
+			}
 		}
 	}
-	restartSub := p.SubListenPort != nil || p.SubPath != nil
+	restartSub := p.SubListenPort != nil || p.SubPath != nil || p.SubReuseHTTPS != nil
 	if p.SubListenPort != nil {
 		port := *p.SubListenPort
 		if port < 0 || port > 65535 {
@@ -1582,13 +1600,36 @@ func nodemgtSettingsSet(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc
 			return nil, nodemgtErr(err)
 		}
 	}
-	if restartSub {
+	if p.SubReuseHTTPS != nil {
+		if err := st.SetSetting("sub_reuse_https", strconv.FormatBool(*p.SubReuseHTTPS)); err != nil {
+			return nil, nodemgtErr(err)
+		}
+		for _, key := range []string{"sub_cert_path", "sub_key_path", "sub_domain"} {
+			if err := st.SetSetting(key, ""); err != nil {
+				return nil, nodemgtErr(err)
+			}
+		}
+	}
+	if p.SubPublicHost != nil || p.SubReuseHTTPS != nil || restartSub {
 		cfg, err := subhttp.LoadConfig(st)
 		if err != nil {
 			return nil, nodemgtErr(err)
 		}
-		if err := subhttp.Apply(cfg); err != nil {
-			return nil, nodemgtErr(err)
+		if p.SubReuseHTTPS != nil && *p.SubReuseHTTPS && cfg.Domain != "" {
+			if p.SubPublicHost == nil || strings.TrimSpace(*p.SubPublicHost) == "" {
+				if err := st.SetSetting("sub_public_host", cfg.Domain); err != nil {
+					return nil, nodemgtErr(err)
+				}
+				cfg.PublicHost = cfg.Domain
+			}
+		}
+		if err := cfg.ValidateTLS(); err != nil {
+			return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
+		}
+		if restartSub {
+			if err := subhttp.Apply(cfg); err != nil {
+				return nil, nodemgtErr(err)
+			}
 		}
 	}
 	_ = st.Audit(nodemgtActor(ctx), "nodemgt.settings.set", "nodemgt", "")

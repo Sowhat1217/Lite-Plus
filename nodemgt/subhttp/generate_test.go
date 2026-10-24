@@ -120,6 +120,9 @@ func TestSubscriptionDeniesDisabledExpiredAndRevokedAccess(t *testing.T) {
 	past := time.Now().Add(-time.Minute)
 	require.NoError(t, st.DB().Model(&models.NodeUser{}).Where("id = ?", row.UserID).Update("expires_at", past).Error)
 	require.Equal(t, 404, publicSubscription(st, row.Token, "?target=sing-box", "").Code)
+	loaded, err := st.GetUser(row.UserID)
+	require.NoError(t, err)
+	require.Equal(t, models.UserExpired, loaded.Status)
 	require.Equal(t, 404, publicSubscription(st, "invalid-token", "?target=loon", "").Code)
 }
 
@@ -162,6 +165,34 @@ func TestTemplateBindingPrecedenceAndUpdates(t *testing.T) {
 	require.Contains(t, doc.Body, "emby.example")
 	wrong := models.SubscriptionTemplateBinding{Scope: "global", Client: "loon", TemplateID: updated.ID}
 	require.ErrorIs(t, st.SetSubscriptionTemplateBinding(&wrong), store.ErrInvalid)
+}
+
+func TestLegacyClashFormatKeepsNodeListWhenATemplateIsBound(t *testing.T) {
+	st, row := subscriptionFixture(t)
+	tpl := subtpl.DefaultTemplate("clash")
+	tpl.ID = ""
+	tpl.Name = "starred"
+	require.NoError(t, st.UpsertSubscriptionTemplate(&tpl))
+	require.NoError(t, st.SetSubscriptionTemplateBinding(&models.SubscriptionTemplateBinding{
+		Scope: "global", Client: "clash", TemplateID: tpl.ID,
+	}))
+	require.NoError(t, st.SetSubscriptionTemplateBinding(&models.SubscriptionTemplateBinding{
+		Scope: "global", Client: "mihomo", TemplateID: tpl.ID,
+	}))
+	user, err := st.GetUser(row.UserID)
+	require.NoError(t, err)
+	nodes, err := sub.ForUser(st, *user)
+	require.NoError(t, err)
+	want, _, err := sub.Render("clash", nodes, nil)
+	require.NoError(t, err)
+	doc, err := Generate(st, row, GenerateRequest{Format: "clash"})
+	require.NoError(t, err)
+	require.Equal(t, want, doc.Body)
+	require.Empty(t, doc.TemplateID)
+	targeted, err := Generate(st, row, GenerateRequest{Target: "mihomo"})
+	require.NoError(t, err)
+	require.Equal(t, tpl.ID, targeted.TemplateID)
+	require.NotEqual(t, want, targeted.Body)
 }
 
 func TestAutomaticShareHostUsesTheSameStoreAsGrants(t *testing.T) {

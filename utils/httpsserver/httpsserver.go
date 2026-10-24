@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -1008,6 +1009,37 @@ func shutdownHTTPServers(ctx context.Context, servers ...*http.Server) error {
 		}
 	}
 	return firstErr
+}
+
+func CertificateDomains(certPath string) ([]string, error) {
+	pemBytes, err := os.ReadFile(strings.TrimSpace(certPath))
+	if err != nil {
+		return nil, fmt.Errorf("read certificate: %w", err)
+	}
+	for rest := pemBytes; len(rest) > 0; {
+		block, next := pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		rest = next
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		leaf, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse certificate: %w", err)
+		}
+		domains := append([]string(nil), leaf.DNSNames...)
+		if leaf.Subject.CommonName != "" {
+			domains = append(domains, leaf.Subject.CommonName)
+		}
+		domains = uniqueStrings(domains)
+		if len(domains) == 0 {
+			return nil, errors.New("certificate has no DNS names")
+		}
+		return domains, nil
+	}
+	return nil, errors.New("certificate chain is empty")
 }
 
 func parseCertificatePair(certPEM, keyPEM []byte) (*tls.Certificate, certificateMetadata, error) {

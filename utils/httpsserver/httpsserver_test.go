@@ -196,6 +196,18 @@ func TestDisabledManagerShowsValidatedCertificateMetadata(t *testing.T) {
 	}
 }
 
+func TestCertificateDomainsReadsLeafNames(t *testing.T) {
+	dir := t.TempDir()
+	certPath, _ := writeTestPair(t, dir, "sub.example.com")
+	domains, err := CertificateDomains(certPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(domains) != 1 || domains[0] != "sub.example.com" {
+		t.Fatalf("domains = %v", domains)
+	}
+}
+
 func TestDisabledManagerAllowsMissingCertificate(t *testing.T) {
 	manager := NewManager()
 	settings := Settings{

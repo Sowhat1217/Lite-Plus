@@ -1306,7 +1306,7 @@ func (s *Store) UpsertCert(row *models.Certificate) error {
 		}
 	}
 	if row.Issuer == "" && row.Source != models.CertSourceFile {
-		row.Issuer = "letsencrypt"
+		row.Issuer = "Let's Encrypt"
 	}
 	row.UpdatedAt = now()
 	if row.CreatedAt.IsZero() {
@@ -1441,6 +1441,9 @@ func (s *Store) GetSetting(key string) (string, error) {
 		return "", err
 	}
 	if key == "cf_api_token" {
+		if strings.TrimSpace(row.Value) == "" {
+			return "", nil
+		}
 		plain, err := secretcrypt.Open(row.Value)
 		if err != nil {
 			return "", err
@@ -1448,6 +1451,10 @@ func (s *Store) GetSetting(key string) (string, error) {
 		return plain, nil
 	}
 	return row.Value, nil
+}
+
+func (s *Store) DeleteSetting(key string) error {
+	return s.db.Where("key = ?", key).Delete(&models.Setting{}).Error
 }
 
 func (s *Store) SetSetting(key, value string) error {

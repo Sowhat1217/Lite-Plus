@@ -99,7 +99,7 @@ func nodemgtTemplatePreview(_ context.Context, req *rpc.JsonRpcRequest) (any, *r
 	}
 	doc, err := subhttp.Generate(st, row, subhttp.GenerateRequest{Target: p.Target, Template: &p.Template})
 	if err != nil {
-		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
+		return nil, nodemgtErr(err)
 	}
 	return doc, nil
 }
