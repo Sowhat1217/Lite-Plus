@@ -20,6 +20,7 @@ BASELINE_KEYS = (
     "plus",
 )
 HASH_RE = re.compile(r"(?:lite|komari)-version-hash:\s*([A-Za-z0-9]{7})", re.I)
+HASH_MARKER_RE = re.compile(r"<!--\s*(?:lite|komari)-version-hash:\s*[A-Za-z0-9]{7}\s*-->", re.I)
 PLUS_HASH_ALPHABET = "abcdefghijklmnoprstuvwxyz0123456789"
 
 
@@ -59,19 +60,49 @@ def new_plus_hash() -> str:
             return value
 
 
-def decide_same_version(base_lite_hash: str, base_web_hash: str, lite_hash: str, web_hash: str) -> str:
+def as_moved(value: str | bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes"}
+
+
+def patch_release_body(body: str, version_hash: str) -> str:
+    version_hash = (version_hash or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9]{7}", version_hash) or "q" in version_hash.lower():
+        raise SystemExit(f"invalid plus hash: {version_hash}")
+    marker = f"<!-- lite-version-hash: {version_hash} -->"
+    text = body or ""
+    if HASH_MARKER_RE.search(text):
+        return HASH_MARKER_RE.sub(marker, text, count=1)
+    if text.strip():
+        return f"{marker}\n\n{text.lstrip()}"
+    return f"{marker}\n"
+
+
+def decide_same_version(
+    base_lite_hash: str,
+    base_web_hash: str,
+    lite_hash: str,
+    web_hash: str,
+    lite_moved: str | bool = False,
+    web_moved: str | bool = False,
+) -> str:
     """skip, wait, or rebuild when Lite's x.y.z tag did not change."""
     base_lite_hash = (base_lite_hash or "").strip()
     base_web_hash = (base_web_hash or "").strip()
     lite_hash = (lite_hash or "").strip()
     web_hash = (web_hash or "").strip()
-    if not lite_hash:
+    lite_tag_moved = as_moved(lite_moved)
+    web_tag_moved = as_moved(web_moved)
+    lite_hash_changed = bool(lite_hash) and lite_hash != base_lite_hash
+    web_hash_changed = web_hash != base_web_hash
+    lite_changed = lite_tag_moved or lite_hash_changed
+    web_changed = web_tag_moved or web_hash_changed
+    if not lite_changed and not web_changed:
         return "skip"
-    if lite_hash == base_lite_hash and web_hash == base_web_hash:
-        return "skip"
-    if lite_hash == base_lite_hash:
+    if not lite_changed:
         return "wait"
-    if web_hash and base_web_hash and web_hash == base_web_hash:
+    if not web_tag_moved and web_hash and base_web_hash and not web_hash_changed:
         return "wait"
     return "rebuild"
 
@@ -226,7 +257,7 @@ def rewrite_web(
 def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit(
-            "usage: plus_follow.py bump|theme-ref|validate-baseline|rewrite-server|rewrite-web|apply-ours|release-hash|decide-same|new-hash ..."
+            "usage: plus_follow.py bump|theme-ref|validate-baseline|rewrite-server|rewrite-web|apply-ours|release-hash|patch-hash|decide-same|new-hash ..."
         )
     cmd = sys.argv[1]
     if cmd == "bump":
@@ -268,9 +299,17 @@ def main() -> None:
         sys.stdout.write(release_hash(body))
         return
     if cmd == "decide-same":
-        if len(sys.argv) != 6:
-            raise SystemExit("usage: plus_follow.py decide-same <base_lite_hash> <base_web_hash> <lite_hash> <web_hash>")
-        sys.stdout.write(decide_same_version(*sys.argv[2:6]))
+        if len(sys.argv) not in {6, 8}:
+            raise SystemExit(
+                "usage: plus_follow.py decide-same <base_lite_hash> <base_web_hash> <lite_hash> <web_hash> [<lite_moved> <web_moved>]"
+            )
+        sys.stdout.write(decide_same_version(*sys.argv[2:]))
+        return
+    if cmd == "patch-hash":
+        if len(sys.argv) != 4:
+            raise SystemExit("usage: plus_follow.py patch-hash <file> <hash>")
+        path = pathlib.Path(sys.argv[2])
+        path.write_text(patch_release_body(path.read_text(encoding="utf-8"), sys.argv[3]), encoding="utf-8")
         return
     if cmd == "new-hash":
         sys.stdout.write(new_plus_hash())

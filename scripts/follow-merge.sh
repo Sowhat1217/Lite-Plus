@@ -12,7 +12,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 cd "$REPO"
 git remote add lite-upstream "$UPSTREAM_URL" 2>/dev/null || git remote set-url lite-upstream "$UPSTREAM_URL"
-git fetch lite-upstream tag "$TAG" --no-tags
+git fetch --force --no-tags lite-upstream "refs/tags/${TAG}:refs/tags/${TAG}"
 
 set +e
 git merge --no-ff --no-edit "refs/tags/$TAG"

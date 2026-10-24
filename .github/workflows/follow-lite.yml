@@ -95,18 +95,34 @@ jobs:
           fi
           echo "Lite $TAG hash=$LITE_HASH lite_web_hash=$WEB_HASH"
 
+          git fetch --force https://github.com/nuomiiiii/Lite.git "refs/tags/${TAG}:refs/lite-follow/lite"
+          LITE_MOVED=1
+          if git merge-base --is-ancestor refs/lite-follow/lite HEAD; then
+            LITE_MOVED=0
+          fi
+          WEB_MOVED=0
+          if git ls-remote --exit-code https://github.com/nuomiiiii/Lite-web.git "refs/tags/${TAG}" >/dev/null; then
+            git fetch --force https://github.com/nuomiiiii/Lite-web.git "refs/tags/${TAG}:refs/lite-follow/web"
+            git fetch --force "https://github.com/${GITHUB_REPOSITORY_OWNER}/Lite-Plus-web.git" "refs/heads/main:refs/lite-follow/plus-web"
+            WEB_MOVED=1
+            if git merge-base --is-ancestor refs/lite-follow/web refs/lite-follow/plus-web; then
+              WEB_MOVED=0
+            fi
+          fi
+          echo "Lite $TAG moved=$LITE_MOVED web_moved=$WEB_MOVED"
+
           MODE="bump"
           NEW_PLUS="$PLUS"
           NEW_PLUS_HASH=""
           if [ "$TAG" = "$BASE_LITE" ] && [ "$TAG" = "$BASE_WEB" ]; then
-            ACTION="$(python3 scripts/plus_follow.py decide-same "$BASE_LITE_HASH" "$BASE_WEB_HASH" "$LITE_HASH" "$WEB_HASH")"
+            ACTION="$(python3 scripts/plus_follow.py decide-same "$BASE_LITE_HASH" "$BASE_WEB_HASH" "$LITE_HASH" "$WEB_HASH" "$LITE_MOVED" "$WEB_MOVED")"
             case "$ACTION" in
               skip)
                 echo "already following $TAG hash=$LITE_HASH"
                 exit 0
                 ;;
               wait)
-                echo "Lite $TAG same-version hashes are not both ready yet (lite=$LITE_HASH web=$WEB_HASH); skip this round"
+                echo "Lite $TAG same-version not both ready yet (lite=$LITE_HASH moved=$LITE_MOVED web=$WEB_HASH moved=$WEB_MOVED); skip this round"
                 exit 0
                 ;;
               rebuild)
@@ -211,14 +227,7 @@ jobs:
             local hash="$3"
             local body_file="$RUNNER_TEMP/release-body-${repo##*/}.md"
             gh release view "$tag" --repo "$repo" --json body --jq .body > "$body_file"
-            BODY_FILE="$body_file" VERSION_HASH="$hash" python3 - <<'PY'
-import os, pathlib, re
-path = pathlib.Path(os.environ["BODY_FILE"])
-marker = f"<!-- lite-version-hash: {os.environ['VERSION_HASH']} -->"
-body = path.read_text(encoding="utf-8")
-pattern = re.compile(r"<!--\s*(?:lite|komari)-version-hash:\s*[A-Za-z0-9]{7}\s*-->", re.I)
-path.write_text(pattern.sub(marker, body, count=1) if pattern.search(body) else f"{marker}\n\n{body}", encoding="utf-8")
-PY
+            python3 scripts/plus_follow.py patch-hash "$body_file" "$hash"
             gh release edit "$tag" --repo "$repo" --notes-file "$body_file"
           }
 
