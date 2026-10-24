@@ -173,18 +173,46 @@ type QuotaLease struct {
 func (QuotaLease) TableName() string { return "nodemgt_quota_leases" }
 
 type Subscription struct {
+	ID         string    `json:"id" gorm:"type:varchar(36);primaryKey"`
+	UserID     string    `json:"user_id" gorm:"type:varchar(36);index;not null"`
+	Token      string    `json:"token" gorm:"type:varchar(64);uniqueIndex;not null"`
+	TokenHash  string    `json:"-" gorm:"type:varchar(64);index"`
+	Format     string    `json:"format" gorm:"type:varchar(16);not null;default:'xray'"`
+	AutoDetect bool      `json:"auto_detect" gorm:"not null;default:false"`
+	ExtraURLs  string    `json:"extra_urls" gorm:"type:longtext"`
+	Enabled    bool      `json:"enabled" gorm:"not null;default:true"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+func (Subscription) TableName() string { return "nodemgt_subscriptions" }
+
+// Templates never contain user credentials. Nodes are injected after grants are resolved.
+type SubscriptionTemplate struct {
 	ID        string    `json:"id" gorm:"type:varchar(36);primaryKey"`
-	UserID    string    `json:"user_id" gorm:"type:varchar(36);index;not null"`
-	Token     string    `json:"token" gorm:"type:varchar(64);uniqueIndex;not null"`
-	TokenHash string    `json:"-" gorm:"type:varchar(64);index"`
-	Format    string    `json:"format" gorm:"type:varchar(16);not null;default:'xray'"`
-	ExtraURLs string    `json:"extra_urls" gorm:"type:longtext"`
-	Enabled   bool      `json:"enabled" gorm:"not null;default:true"`
+	Name      string    `json:"name" gorm:"type:varchar(100);not null"`
+	Kind      string    `json:"kind" gorm:"type:varchar(16);not null"`
+	Content   string    `json:"content" gorm:"type:longtext;not null"`
+	Revision  uint64    `json:"revision" gorm:"not null;default:1"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-func (Subscription) TableName() string { return "nodemgt_subscriptions" }
+func (SubscriptionTemplate) TableName() string { return "nodemgt_subscription_templates" }
+
+// One template per scope and client. Empty global scope_id is intentional.
+type SubscriptionTemplateBinding struct {
+	ID         string    `json:"id" gorm:"type:varchar(36);primaryKey"`
+	Scope      string    `json:"scope" gorm:"type:varchar(16);not null;uniqueIndex:subtpl_scope_client"`
+	ScopeID    string    `json:"scope_id" gorm:"type:varchar(36);not null;uniqueIndex:subtpl_scope_client"`
+	Client     string    `json:"client" gorm:"type:varchar(16);not null;uniqueIndex:subtpl_scope_client"`
+	TemplateID string    `json:"template_id" gorm:"type:varchar(36);not null;index"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+func (SubscriptionTemplateBinding) TableName() string {
+	return "nodemgt_subscription_template_bindings"
+}
 
 const (
 	ExtraLinkKindLink         = "link"
@@ -286,6 +314,8 @@ func All() []any {
 		&QuotaLedger{},
 		&QuotaLease{},
 		&Subscription{},
+		&SubscriptionTemplate{},
+		&SubscriptionTemplateBinding{},
 		&UserExtraLink{},
 		&Certificate{},
 		&ControlCommand{},

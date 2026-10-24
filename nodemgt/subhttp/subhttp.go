@@ -13,7 +13,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nuomiiiii/lite/database/dbcore"
-	"github.com/nuomiiiii/lite/nodemgt/models"
 	"github.com/nuomiiiii/lite/nodemgt/store"
 	"github.com/nuomiiiii/lite/nodemgt/sub"
 )
@@ -160,37 +159,21 @@ func Gate() gin.HandlerFunc {
 }
 
 func Write(c *gin.Context, st *store.Store, token string) {
+	c.Header("Cache-Control", "no-store")
+	c.Header("Vary", "User-Agent")
+	c.Header("X-Content-Type-Options", "nosniff")
 	row, err := st.GetSubscriptionByToken(token)
 	if err != nil || !row.Enabled {
 		c.String(http.StatusNotFound, "not found")
 		return
 	}
-	user, err := st.GetUser(row.UserID)
-	if err != nil || user.Status != models.UserActive {
-		c.String(http.StatusNotFound, "not found")
-		return
-	}
-	if user.ExpiresAt != nil && user.ExpiresAt.Before(time.Now().UTC()) {
-		_ = st.SetUserStatus(user.ID, models.UserExpired)
-		c.String(http.StatusNotFound, "not found")
-		return
-	}
-	nodes, err := sub.ForUser(st, *user)
+	doc, err := Generate(st, *row, GenerateRequest{Target: c.Query("target"), Format: c.Query("format"), UserAgent: c.Request.UserAgent()})
 	if err != nil {
-		c.String(http.StatusInternalServerError, err.Error())
+		c.String(http.StatusNotFound, "Subscription unavailable")
 		return
 	}
-	format := c.Query("format")
-	if format == "" {
-		format = row.Format
-	}
-	body, ctype, err := sub.Render(format, nodes, ExpandedExtras(st, row.UserID, row.ExtraURLs))
-	if err != nil {
-		c.String(http.StatusBadRequest, err.Error())
-		return
-	}
-	c.Header("Cache-Control", "no-store")
-	c.Data(http.StatusOK, ctype, []byte(body))
+	c.Header("X-Subscription-Client", doc.Client)
+	c.Data(http.StatusOK, doc.ContentType, []byte(doc.Body))
 }
 
 func ExpandedExtras(st *store.Store, userID, extraURLs string) []string {

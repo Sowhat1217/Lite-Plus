@@ -24,6 +24,8 @@ require (
 	gorm.io/gorm v1.26.1
 )
 
+require github.com/MMWOrg/mmwX-plugins/proxyparser v0.4.0
+
 require (
 	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
@@ -82,5 +84,5 @@ require (
 	golang.org/x/sync v0.23.0
 	golang.org/x/text v0.42.0
 	google.golang.org/protobuf v1.36.6 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1
 )

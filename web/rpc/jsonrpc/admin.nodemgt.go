@@ -19,8 +19,8 @@ import (
 	"github.com/nuomiiiii/lite/nodemgt/ops"
 	"github.com/nuomiiiii/lite/nodemgt/secretcrypt"
 	"github.com/nuomiiiii/lite/nodemgt/store"
-	"github.com/nuomiiiii/lite/nodemgt/sub"
 	"github.com/nuomiiiii/lite/nodemgt/subhttp"
+	"github.com/nuomiiiii/lite/nodemgt/subtpl"
 	"github.com/nuomiiiii/lite/pkg/rpc"
 	logger "github.com/nuomiiiii/lite/utils/log"
 )
@@ -1296,16 +1296,17 @@ func nodemgtSubList(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpc
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		item := map[string]any{
-			"id":         row.ID,
-			"user_id":    row.UserID,
-			"token":      row.Token,
-			"format":     row.Format,
-			"extra_urls": row.ExtraURLs,
-			"enabled":    row.Enabled,
-			"created_at": row.CreatedAt,
-			"updated_at": row.UpdatedAt,
-			"path":       subhttp.NormalizePath(cfg.Path) + row.Token,
-			"url":        subhttp.PublicURL(cfg, row.Token),
+			"id":          row.ID,
+			"user_id":     row.UserID,
+			"token":       row.Token,
+			"format":      row.Format,
+			"auto_detect": row.AutoDetect,
+			"extra_urls":  row.ExtraURLs,
+			"enabled":     row.Enabled,
+			"created_at":  row.CreatedAt,
+			"updated_at":  row.UpdatedAt,
+			"path":        subhttp.NormalizePath(cfg.Path) + row.Token,
+			"url":         subhttp.PublicURL(cfg, row.Token),
 		}
 		if user, ok := byUser[row.UserID]; ok {
 			item["username"] = user.Username
@@ -1332,6 +1333,9 @@ func nodemgtSubUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.J
 			}
 		}
 	}
+	if _, err := subtpl.NormalizeClient(row.Format); row.Format != "" && err != nil {
+		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
+	}
 	if err := st.UpsertSubscription(&row); err != nil {
 		return nil, nodemgtErr(err)
 	}
@@ -1352,8 +1356,10 @@ func nodemgtSubDelete(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.Jso
 
 func nodemgtSubPreview(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
 	var p struct {
-		ID     string `json:"id"`
-		Format string `json:"format"`
+		ID        string `json:"id"`
+		Format    string `json:"format"`
+		Target    string `json:"target"`
+		UserAgent string `json:"user_agent"`
 	}
 	_ = req.BindParams(&p)
 	st := nodemgtST()
@@ -1371,38 +1377,20 @@ func nodemgtSubPreview(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.Js
 	if row.ID == "" {
 		return nil, nodemgtErr(store.ErrNotFound)
 	}
-	user, err := st.GetUser(row.UserID)
+	doc, err := subhttp.Generate(st, row, subhttp.GenerateRequest{Target: p.Target, Format: p.Format, UserAgent: p.UserAgent})
 	if err != nil {
 		return nil, nodemgtErr(err)
-	}
-	nodes, err := sub.ForUser(st, *user)
-	if err != nil {
-		return nil, nodemgtErr(err)
-	}
-	format := p.Format
-	if format == "" {
-		format = row.Format
-	}
-	body, ctype, err := sub.Render(format, nodes, subhttp.ExpandedExtras(st, row.UserID, row.ExtraURLs))
-	if err != nil {
-		return nil, nodemgtErr(err)
-	}
-	switch strings.ToLower(format) {
-	case "", "xray", "v2ray", "v2rayn", "base64":
-		links := sub.DecodeShareLinks(body)
-		if len(links) > 0 {
-			body = strings.Join(links, "\n")
-		} else {
-			body = ""
-		}
 	}
 	cfg, err := subhttp.LoadConfig(st)
 	if err != nil {
 		return nil, nodemgtErr(err)
 	}
 	return map[string]any{
-		"body":         body,
-		"content_type": ctype,
+		"body":         doc.Body,
+		"content_type": doc.ContentType,
+		"client":       doc.Client,
+		"template_id":  doc.TemplateID,
+		"warnings":     doc.Warnings,
 		"token":        row.Token,
 		"path":         subhttp.NormalizePath(cfg.Path) + row.Token,
 		"url":          subhttp.PublicURL(cfg, row.Token),
