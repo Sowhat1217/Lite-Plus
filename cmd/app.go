@@ -26,6 +26,10 @@ import (
 	"github.com/nuomiiiii/lite/database/models"
 	d_notification "github.com/nuomiiiii/lite/database/notification"
 	"github.com/nuomiiiii/lite/database/tasks"
+	"github.com/nuomiiiii/lite/nodemgt/control"
+	"github.com/nuomiiiii/lite/nodemgt/ops"
+	"github.com/nuomiiiii/lite/nodemgt/store"
+	"github.com/nuomiiiii/lite/nodemgt/subhttp"
 	"github.com/nuomiiiii/lite/pkg/config"
 	"github.com/nuomiiiii/lite/pkg/corn"
 	"github.com/nuomiiiii/lite/pkg/metric"
@@ -50,7 +54,6 @@ import (
 	"github.com/nuomiiiii/lite/web/scheduledexec"
 	"github.com/nuomiiiii/lite/web/security"
 	storageupdateweb "github.com/nuomiiiii/lite/web/storageupdate"
-	upgradeweb "github.com/nuomiiiii/lite/web/update"
 	"github.com/nuomiiiii/lite/web/upload"
 	"gorm.io/gorm"
 )
@@ -367,10 +370,6 @@ func (a *App) initOAuth() {
 	})
 }
 
-func (a *App) LegacyUpgradeRequired() (bool, migrations.LegacyMonitoringSummary, error) {
-	return migrations.LegacyMonitoringMigrationRequired(dbcore.GetDBInstance())
-}
-
 func (a *App) MetricStorageUpgradeRequired() (bool, metric.SQLiteMigrationSummary, error) {
 	summary, err := metricstore.InspectSQLiteStorageMigration(context.Background())
 	return summary.Required, summary, err
@@ -458,80 +457,6 @@ func (a *App) RunInstallGuide() (bool, error) {
 		defer cancel()
 		if err := a.server.Shutdown(ctx); err != nil {
 			return false, fmt.Errorf("stop install server: %w", err)
-		}
-		a.server = nil
-		a.engine = nil
-		return true, nil
-	}
-}
-
-// RunLegacyUpgrade starts a restricted HTTP server on the normal listen
-// address. It returns only after the migration finishes and the restricted
-// listener has released the port, or after shutdown/interruption.
-func (a *App) RunLegacyUpgrade(summary migrations.LegacyMonitoringSummary) (bool, error) {
-	a.initOAuth()
-	controller := upgradeweb.NewController(dbcore.GetDBInstance(), summary)
-	controller.Activate()
-	defer controller.Deactivate()
-
-	r := gin.New()
-	r.Use(logger.GinLogger())
-	r.Use(logger.GinRecovery())
-	cors := security.NewCorsController(a.settings.CorsOriginCheckEnabled, a.settings.CorsAllowedOrigins)
-	r.Use(cors.Middleware())
-	r.Use(api.IdentityMiddleware())
-	r.Use(func(c *gin.Context) {
-		if strings.HasPrefix(c.Request.URL.Path, "/api") {
-			c.Header("Cache-Control", "no-store")
-		}
-		c.Next()
-	})
-
-	controller.Register(r)
-	frontendpublic.Static(r.Group("/"), func(handlers ...gin.HandlerFunc) {
-		r.NoRoute(func(c *gin.Context) {
-			requestPath := c.Request.URL.Path
-			if strings.HasPrefix(requestPath, "/api") {
-				api.RespondError(c, http.StatusNotFound, "Not found in upgrade mode")
-				return
-			}
-			if c.Request.Method == http.MethodGet && requestPath != upgradeweb.PagePath && filepath.Ext(requestPath) == "" {
-				c.Redirect(http.StatusTemporaryRedirect, upgradeweb.PagePath)
-				return
-			}
-			for _, handler := range handlers {
-				handler(c)
-				if c.IsAborted() {
-					return
-				}
-			}
-		})
-	})
-
-	a.engine = r
-	a.server = &http.Server{Addr: flags.Listen, Handler: r}
-	serverErr := make(chan error, 1)
-	logger.Infof("server", "Legacy monitoring data requires the 1.2.7 upgrade wizard on %s", flags.Listen)
-	go func() {
-		if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			serverErr <- err
-		}
-	}()
-
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(quit)
-
-	select {
-	case err := <-serverErr:
-		return false, fmt.Errorf("listen in upgrade mode: %w", err)
-	case <-quit:
-		return false, a.Shutdown()
-	case <-controller.Done():
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := a.server.Shutdown(ctx); err != nil {
-			return false, fmt.Errorf("stop upgrade server: %w", err)
 		}
 		a.server = nil
 		a.engine = nil
@@ -642,6 +567,33 @@ func (a *App) StartBackground() error {
 	stopThemeAutoUpdate := admin.StartThemeAutoUpdate()
 	a.addCleanup("theme-auto-update", func(context.Context) error {
 		stopThemeAutoUpdate()
+		return nil
+	})
+
+	if err := subhttp.Start(); err != nil {
+		logger.Errorf("nodemgt-sub", "subscription listener: %v", err)
+	}
+	a.addCleanup("nodemgt-sub", func(ctx context.Context) error {
+		return subhttp.Shutdown(ctx)
+	})
+
+	dispatchStop := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(15 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-dispatchStop:
+				return
+			case <-tick.C:
+				st := store.New(dbcore.GetDBInstance())
+				_, _ = ops.New(st).SyncDueTrafficResets(time.Now().UTC())
+				_ = control.PushPending(st, "")
+			}
+		}
+	}()
+	a.addCleanup("nodemgt-dispatch", func(context.Context) error {
+		close(dispatchStop)
 		return nil
 	})
 

@@ -14,7 +14,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/nuomiiiii/lite/database/clients"
+	"github.com/nuomiiiii/lite/database/dbcore"
 	"github.com/nuomiiiii/lite/database/tasks"
+	"github.com/nuomiiiii/lite/nodemgt/control"
+	"github.com/nuomiiiii/lite/nodemgt/ops"
+	"github.com/nuomiiiii/lite/nodemgt/store"
 	v2 "github.com/nuomiiiii/lite/protocol/v2"
 	"github.com/nuomiiiii/lite/utils/notifier"
 	agent_runtime "github.com/nuomiiiii/lite/web/agent"
@@ -122,6 +126,67 @@ func handleV2RPC(uuid string, req v2.Request, allowWait bool) v2.Response {
 			return v2.Error(req.ID, -32000, "failed to save route result", err.Error())
 		}
 		return v2.Success(req.ID, gin.H{"status": "success"})
+	case v2.MethodNodemgtControlResult:
+		var params struct {
+			OperationID string `json:"operation_id"`
+			Status      string `json:"status"`
+			Error       string `json:"error"`
+			Fingerprint string `json:"fingerprint"`
+			CSRPEM      string `json:"csr_pem"`
+			CertID      string `json:"cert_id"`
+			Domain      string `json:"domain"`
+			Issuer      string `json:"issuer"`
+			NotAfter    string `json:"not_after"`
+		}
+		if err := bindV2Params(req.Params, &params); err != nil {
+			return v2.Error(req.ID, -32602, "invalid nodemgt control result", err.Error())
+		}
+		var notAfter *time.Time
+		if ts := strings.TrimSpace(params.NotAfter); ts != "" {
+			if parsed, err := time.Parse(time.RFC3339, ts); err == nil {
+				notAfter = &parsed
+			}
+		}
+		st := store.New(dbcore.GetDBInstance())
+		if err := control.HandleResult(st, control.Result{
+			NodeUUID:    uuid,
+			OperationID: params.OperationID,
+			Status:      params.Status,
+			Error:       params.Error,
+			Fingerprint: params.Fingerprint,
+			CSRPEM:      params.CSRPEM,
+			CertID:      params.CertID,
+			Domain:      params.Domain,
+			Issuer:      params.Issuer,
+			NotAfter:    notAfter,
+		}); err != nil {
+			return v2.Error(req.ID, -32000, "failed to ack nodemgt control", err.Error())
+		}
+		return v2.Success(req.ID, gin.H{"status": "success"})
+	case v2.MethodNodemgtUsage:
+		var params struct {
+			UserID  string `json:"user_id"`
+			Bytes   int64  `json:"bytes"`
+			BatchID string `json:"batch_id"`
+		}
+		if err := bindV2Params(req.Params, &params); err != nil {
+			return v2.Error(req.ID, -32602, "invalid nodemgt usage", err.Error())
+		}
+		if err := ops.New(store.New(dbcore.GetDBInstance())).RecordUsageFromNode(uuid, params.UserID, params.Bytes, params.BatchID); err != nil {
+			return v2.Error(req.ID, -32000, "failed to record nodemgt usage", err.Error())
+		}
+		return v2.Success(req.ID, gin.H{"status": "success"})
+	case v2.MethodNodemgtPresence:
+		var params struct {
+			Users []store.UserPresence `json:"users"`
+		}
+		if err := bindV2Params(req.Params, &params); err != nil {
+			return v2.Error(req.ID, -32602, "invalid nodemgt presence", err.Error())
+		}
+		if err := ops.New(store.New(dbcore.GetDBInstance())).RecordPresenceFromNode(uuid, params.Users); err != nil {
+			return v2.Error(req.ID, -32000, "failed to record nodemgt presence", err.Error())
+		}
+		return v2.Success(req.ID, gin.H{"status": "success"})
 	case v2.MethodAgentPull:
 		var params v2.PullParams
 		if err := bindV2Params(req.Params, &params); err != nil {
@@ -129,6 +194,9 @@ func handleV2RPC(uuid string, req v2.Request, allowWait bool) v2.Response {
 		}
 		ingestMCPCapability(uuid, params)
 		refreshPostPresence(uuid)
+		go func() {
+			_ = control.PushPending(store.New(dbcore.GetDBInstance()), uuid)
+		}()
 		timeout := 0 * time.Second
 		if allowWait {
 			timeout = 25 * time.Second

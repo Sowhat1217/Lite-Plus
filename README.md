@@ -1,35 +1,31 @@
 ![Lite](docs/assets/branding/lite-banner.svg)
 
-[![Release](https://img.shields.io/github/v/release/nuomiiiii/lite?label=release)](https://github.com/nuomiiiii/lite/releases)
-[![Docker](https://img.shields.io/badge/GHCR-nuomiiiii%2Flite-2496ED?logo=docker)](https://github.com/nuomiiiii/lite/pkgs/container/lite)
+[![Release](https://img.shields.io/github/v/release/nuomiiiii/Lite-Plus?label=release)](https://github.com/nuomiiiii/Lite-Plus/releases)
+[![Docker](https://img.shields.io/badge/GHCR-nuomiiiii%2Flite--plus-2496ED?logo=docker)](https://github.com/nuomiiiii/Lite-Plus/pkgs/container/lite-plus)
 [![Telegram](https://img.shields.io/badge/Telegram-Lite-26A5E4?logo=telegram&logoColor=white)](https://t.me/komari_lite)
-[![License](https://img.shields.io/github/license/nuomiiiii/lite)](LICENSE)
+[![License](https://img.shields.io/github/license/nuomiiiii/Lite-Plus)](LICENSE)
 
 Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务端提供 Web 管理界面，Agent 负责采集节点状态、执行延迟与回程线路探测，并在管理员授权后提供远程终端、文件管理和任务执行能力。通过 MCP 代理，还可以让 AI 客户端在授权有效期内管理选定的服务器。
 
 本项目基于 [komari-monitor/komari](https://github.com/komari-monitor/komari) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时提供流量管理、成本中心、备份迁移、接入安全与适配电脑和手机的管理界面。
 
-**当前正式版：Lite [`2.3.9`](https://github.com/nuomiiiii/Lite/releases/tag/2.3.9) · 配套 Agent [`2.3.6.3`](https://github.com/nuomiiiii/Lite-agent/releases/tag/2.3.6.3) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
+**当前正式版：Lite-Plus [`0.0.1`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.1) · 配套 Agent [`0.0.0.4`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.0.4) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
 
-[使用手册](https://nuomiiiii.github.io/Lite-document/) · [快速开始](#快速开始) · [功能概览](#功能概览) · [升级说明](#从旧版本升级) · [Agent](#agent-与远程管理) · [MCP 代理](#mcp-代理与-ai-授权) · [完整更新日志](https://github.com/nuomiiiii/lite/releases)
+[使用手册](https://nuomiiiii.github.io/Lite-document/) · [快速开始](#快速开始) · [功能概览](#功能概览) · [升级说明](#从旧版本升级) · [Agent](#agent-与远程管理) · [MCP 代理](#mcp-代理与-ai-授权) · [完整更新日志](https://github.com/nuomiiiii/Lite-Plus/releases)
 
 > [!WARNING]
 > Lite 只能部署在你拥有或已获得授权管理的设备上。请勿将其用于未经授权的访问、持久化、命令执行或其他滥用行为。管理员应启用 HTTPS 与双因素认证，并妥善保护 Agent Token 和备份文件。
 
-## 2.3.7 稳定版能力摘要
+## 0.0.1 稳定版能力摘要
 
-- **定时任务**：可以按北京时间，在选定的服务器上定时远程执行命令，并保留每次输出。任务可以搜索、调整顺序，点进详情查看执行日志。
-- **加载**：仪表盘时延排行和服务器列表在服务器较多时会更快打开。
-- **MCP 授权**：批准页可以勾选长期授权，默认不勾选。勾选后，这条授权在撤销前一直有效，浏览器登录过期和服务器重启都不会让它失效；不勾选则按所选时长。单次 MCP 终端跟授权到期走，空闲不会结束。最长授权时长可以设到 72 小时。
-- **远程终端**：单次最长 6 小时，空闲 30 分钟会结束。已打开的会话不再显示服务器标签。
-- **仪表盘**：新增「续费日历」，按每台服务器到期日汇总。点有到期的日期会列出当天的服务器，点名称进入这台服务器的计费页；设了账单周期的可以点「我已续费」。每日流量明细里，点击服务器名称会进入用量统计。
-- **通知**：新增「告警渠道」，一种告警可以同时发给多路，也可以都不发送。新增「告警汇总推送」，默认关闭；相同内容会在设定时间内合成一条。
-- **延迟监测告警**：进一步细分为「丢包告警」和「延迟异常告警」。原有配置会自动迁移至丢包告警；延迟异常支持自适应基线和固定基线。
-- **服务器到期时间**：可以指定时区，并精确到秒。原有到期日升级后记为北京时间当天 00:00:00。
-- **成本中心**：服务器国旗跟随手选的国家/地区图标；没手选时仍用自动识别。
-- **日志**：过长的 IPv6 会自动换行，不再盖住后面的类型和内容。
-- **手机端远程终端**：复制、粘贴、Tab 旁新增「Ctrl+C」，用来打断正在执行的命令。
-- **内置主题**：Lite-Theme `1.2.4`。首页可按服务器设置探测任务，手机端概览默认关闭。
+- 新增节点管理：入站、出站、路由、节点用户、套餐、证书和订阅，保存后下发到 Lite-Plus-agent。
+- 入站支持 VLESS / VMess / Trojan / Shadowsocks / Hysteria2 / TUIC，以及 TLS / Reality。新建默认仅 IPv4。
+- 出站和路由：节点自带直连、阻断。同一节点上出站标签不能重复。可从已有入站或分享链接导入出站。
+- 用户和套餐：额度、限速、到期时间和在线 IP 上限。
+- 证书可由主控用 Cloudflare DNS-01 代申请，私钥留在节点；也可以绑定节点上已有的证书文件。
+- 新安装默认 HTTP 28777、HTTPS 37888。从 Lite 数据目录升级时保留原来的端口。
+- Linux 直装运行 Plus 安装脚本，已有 /opt/lite 的 Lite 实例选「升级」。
+- Docker 安装替换镜像文件即可。
 
 ## 功能概览
 
@@ -56,16 +52,16 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 复制一行即可下载并安装。适用于使用 systemd 的常见 Linux 发行版：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nuomiiiii/lite/main/install-lite.sh -o install-lite.sh && sudo sh install-lite.sh
+curl -fsSL https://raw.githubusercontent.com/nuomiiiii/Lite-Plus/main/install-lite.sh -o install-lite.sh && sudo sh install-lite.sh
 ```
 
 OpenWrt / iStoreOS 以 root 登录后（通常没有 bash、sudo 或 curl）：
 
 ```sh
-wget -O install-lite.sh https://raw.githubusercontent.com/nuomiiiii/lite/main/install-lite.sh && sh install-lite.sh
+wget -O install-lite.sh https://raw.githubusercontent.com/nuomiiiii/Lite-Plus/main/install-lite.sh && sh install-lite.sh
 ```
 
-安装脚本会按环境选择 systemd 或 procd；满足运行时检查与回退条件后，可使用后台“立即更新”。官方 Linux 包提供 `amd64`、`arm64`、`386`、`riscv64` 和 `loong64`，软路由也需匹配其中一种架构。安装完成后访问 `http://<服务器或路由器 IP>:27777`。正式环境可在后台启用内置 HTTPS，也可以使用反向代理或 Cloudflare Tunnel 接入。详细步骤见[Linux 脚本安装手册](https://nuomiiiii.github.io/Lite-document/install/linux)。
+安装脚本会按环境选择 systemd 或 procd；满足运行时检查与回退条件后，可使用后台“立即更新”。官方 Linux 包提供 `amd64`、`arm64`、`386`、`riscv64` 和 `loong64`，软路由也需匹配其中一种架构。安装完成后访问 `http://<服务器或路由器 IP>:28777`。正式环境可在后台启用内置 HTTPS，也可以使用反向代理或 Cloudflare Tunnel 接入。详细步骤见[Linux 脚本安装手册](https://nuomiiiii.github.io/Lite-document/install/linux)。
 
 ### Docker
 
@@ -74,42 +70,42 @@ mkdir -p ./data
 docker run -d \
   --name lite \
   --restart unless-stopped \
-  -p 27777:27777 \
+  -p 28777:28777 \
   -v "$(pwd)/data:/app/data" \
-  ghcr.io/nuomiiiii/lite:latest
+  ghcr.io/nuomiiiii/lite-plus:latest
 ```
 
-固定使用当前正式版时，将镜像标签改为 `ghcr.io/nuomiiiii/lite:2.3.7`。
+固定使用当前正式版时，将镜像标签改为 `ghcr.io/nuomiiiii/lite-plus:2.3.7`。
 
 更新 Docker 部署前请先备份 `data` 目录，然后拉取新镜像并使用原来的端口和数据挂载重新创建容器：
 
 ```bash
-docker pull ghcr.io/nuomiiiii/lite:latest
+docker pull ghcr.io/nuomiiiii/lite-plus:latest
 docker rm -f lite
 docker run -d \
   --name lite \
   --restart unless-stopped \
-  -p 27777:27777 \
+  -p 28777:28777 \
   -v "$(pwd)/data:/app/data" \
-  ghcr.io/nuomiiiii/lite:latest
+  ghcr.io/nuomiiiii/lite-plus:latest
 ```
 
 不要在未确认备份的情况下删除宿主机数据目录。
 
 ### 二进制文件
 
-从 [Releases](https://github.com/nuomiiiii/lite/releases) 下载与系统架构匹配的文件。正式版提供 Linux `386`、`amd64`、`arm64`、`loong64`、`riscv64`，以及 Windows `386`、`amd64`、`arm64` 构建。
+从 [Releases](https://github.com/nuomiiiii/Lite-Plus/releases) 下载与系统架构匹配的文件。正式版提供 Linux `386`、`amd64`、`arm64`、`loong64`、`riscv64`，以及 Windows `386`、`amd64`、`arm64` 构建。
 
 ```bash
 chmod +x Lite-linux-amd64
-./Lite-linux-amd64 server -l 0.0.0.0:27777
+./Lite-linux-amd64 server -l 0.0.0.0:28777
 ```
 
 默认数据目录为程序工作目录下的 `data`。
 
 ## Agent 与远程管理
 
-Lite `2.3.7` 推荐配套 [Lite-agent `2.3.6.0`](https://github.com/nuomiiiii/Lite-agent/releases/tag/2.3.6.0)。先在后台添加节点，再打开该节点的“节点配置 → 部署指令”，复制完整命令到目标服务器执行。自动发现注册已下线，新安装和 Docker 重建均使用具体节点的部署指令。
+Lite-Plus 推荐配套 [Lite-Plus-agent `0.0.0.4`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.0.4)。先在后台添加节点，再打开该节点的“节点配置 → 部署指令”，复制完整命令到目标服务器执行。自动发现注册已下线，新安装和 Docker 重建均使用具体节点的部署指令。
 
 远程终端、文件管理和远程执行需要同时开启 Lite“系统设置 → 通用 → 允许远程管理”与 Agent 本地 `--enable-remote-control`，新安装默认关闭。进入远程功能时，已启用通行密钥的账号可用通行密钥验证；已启用两步验证但未使用通行密钥时输入当前验证码；未启用时重新输入管理员密码。浏览器远程终端单次最长 6 小时，空闲 30 分钟会结束。
 
@@ -156,26 +152,26 @@ Docker、Windows、不受支持的服务管理方式、外置指标数据库和�
 
 ## 从源码构建
 
-后端使用 Go `1.26.8`，前端构建推荐使用 Node.js `24`，与当前发布流程一致。
+后端使用 Go `1.26.10`，前端构建推荐使用 Node.js `24`，与当前发布流程一致。
 
 以下命令编译服务端；完整网页还需要准备后文所述的系统 UI 与主题资源。
 
 ```bash
-git clone https://github.com/nuomiiiii/Lite.git
-cd Lite
+git clone https://github.com/nuomiiiii/Lite-Plus.git
+cd Lite-Plus
 go build -o Lite
-./Lite server -l 0.0.0.0:27777
+./Lite server -l 0.0.0.0:28777
 ```
 
-正式构建会将 [Lite Web](https://github.com/nuomiiiii/Lite-web) 作为独立系统 UI 构建，并把产物放入 `web/public/systemUI/dist`；公开大屏主题则保存在独立的主题目录中。正式版本必须使用与 Lite 相同版本的 Lite Web 标签，可参考仓库内的 GitHub Actions 构建流程。
+正式构建会将 [Lite-Plus-web](https://github.com/nuomiiiii/Lite-Plus-web) 作为独立系统 UI 构建，并把产物放入 `web/public/systemUI/dist`；公开大屏主题则保存在独立的主题目录中。正式版本必须使用与 Lite-Plus 相同版本的 Lite-Plus-web 标签，可参考仓库内的 GitHub Actions 构建流程。
 
 ## 相关链接
 
-- [版本发布与完整更新日志](https://github.com/nuomiiiii/lite/releases)
+- [版本发布与完整更新日志](https://github.com/nuomiiiii/Lite-Plus/releases)
 - [Lite 文档](https://nuomiiiii.github.io/Lite-document/)
 - [Telegram 群组](https://t.me/komari_lite)
-- [Lite Agent](https://github.com/nuomiiiii/Lite-agent)
-- [Lite Web](https://github.com/nuomiiiii/Lite-web)
+- [Lite-Plus Agent](https://github.com/nuomiiiii/Lite-Plus-agent)
+- [Lite-Plus Web](https://github.com/nuomiiiii/Lite-Plus-web)
 - [Lite-Theme](https://github.com/nuomiiiii/Lite-theme)
 - [上游 Komari](https://github.com/komari-monitor/komari)
 

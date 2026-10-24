@@ -11,6 +11,7 @@ import (
 	"github.com/nuomiiiii/lite/web/mcp"
 	"github.com/nuomiiiii/lite/web/public"
 	jsonRpc "github.com/nuomiiiii/lite/web/rpc/jsonrpc"
+	"github.com/nuomiiiii/lite/nodemgt/subhttp"
 )
 
 // Register binds all HTTP, WebSocket, JSON-RPC and static frontend routes.
@@ -18,6 +19,7 @@ import (
 // 设计：JSON 类接口统一经声明式路由桥 jsonRpc.Bind 绑定到对应 RPC2 方法，
 // 不再有 per-resource gin handler 层。仅二进制/流/重定向/特殊鉴权类接口保留为 REST handler。
 func Register(r *gin.Engine) {
+	r.Use(subhttp.Gate())
 	r.Any("/ping", func(c *gin.Context) {
 		c.String(200, "pong")
 	})

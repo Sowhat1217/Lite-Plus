@@ -65,7 +65,7 @@ func writeRestoreArchiveFiles(t *testing.T, archivePath string, files map[string
 		}
 		file.Close()
 	}
-	marker, err := writer.Create("komari-backup-markup")
+	marker, err := writer.Create("lite-backup-markup")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestInterruptedRestoreKeepsDataAfterCommitMarker(t *testing.T) {
 	}
 }
 
-func TestRestoreStagedBackupAdoptsKomariDatabase(t *testing.T) {
+func TestRestoreStagedBackupRejectsKomariDatabase(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "data")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
@@ -308,28 +308,12 @@ func TestRestoreStagedBackupAdoptsKomariDatabase(t *testing.T) {
 	t.Cleanup(func() { flags.DatabaseFile = previous })
 	flags.DatabaseFile = filepath.Join(dataDir, "lite.db")
 
-	restore, err := restoreStagedBackup(dataDir)
-	if err != nil {
-		t.Fatalf("restore komari.db backup: %v", err)
-	}
-	if err := restore.Commit(); err != nil {
-		t.Fatalf("commit restore: %v", err)
-	}
-	db, err := sql.Open("sqlite3", filepath.Join(dataDir, "lite.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var value string
-	if err := db.QueryRow(`SELECT value FROM state`).Scan(&value); err != nil {
-		t.Fatal(err)
-	}
-	if value != "from-komari" {
-		t.Fatalf("restored value = %q, want from-komari", value)
+	if _, err := restoreStagedBackup(dataDir); err == nil {
+		t.Fatal("komari.db backup must not restore as Lite Plus")
 	}
 }
 
-func TestRestoreStagedBackupAdoptsKomariFullBackupWithMetrics(t *testing.T) {
+func TestRestoreStagedBackupRejectsKomariFullBackup(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "data")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
@@ -347,24 +331,8 @@ func TestRestoreStagedBackupAdoptsKomariFullBackupWithMetrics(t *testing.T) {
 	t.Cleanup(func() { flags.DatabaseFile = previous })
 	flags.DatabaseFile = filepath.Join(dataDir, "lite.db")
 
-	restore, err := restoreStagedBackup(dataDir)
-	if err != nil {
-		t.Fatalf("restore komari 1.4 full backup: %v", err)
-	}
-	if err := restore.Commit(); err != nil {
-		t.Fatalf("commit restore: %v", err)
-	}
-	for name, want := range map[string]string{
-		"lite.db":    "from-komari",
-		"metrics.db": "from-komari-metrics",
-	} {
-		got, err := os.ReadFile(filepath.Join(dataDir, name))
-		if err != nil {
-			t.Fatalf("read restored %s: %v", name, err)
-		}
-		if !strings.Contains(string(got), want) {
-			t.Fatalf("restored %s = %q, want payload %q", name, got, want)
-		}
+	if _, err := restoreStagedBackup(dataDir); err == nil {
+		t.Fatal("komari full backup must not restore as Lite Plus")
 	}
 }
 

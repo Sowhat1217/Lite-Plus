@@ -1,0 +1,12 @@
+cmd/app.go
+cmd/root.go
+database/dbcore/dbcore.go
+web/api/client/report_v2.go
+web/router/router.go
+web/api/WebSocket.go
+web/mcp/oauth.go
+web/mcp/store.go
+web/mcp/admin.go
+web/mcp/authorization_code_redeem_test.go
+database/auditlog/catalog.go
+go.mod

@@ -21,27 +21,29 @@ var ServerCmd = &cobra.Command{
 }
 
 func init() {
-	// -l / LITE_LISTEN / KOMARI_LISTEN 原样保留。未指定时：新安装 27777，
-	// 从 Komari / Komari Lite 升级则继续用原来的端口，不改到 Lite 默认口。
-	ServerCmd.PersistentFlags().StringVarP(&flags.Listen, "listen", "l", "0.0.0.0:27777", "监听地址 [env: LITE_LISTEN]")
+	// -l / LITE_LISTEN 原样保留。未指定时：新安装 28777。
+	// 从 Lite 升级则继续用原来实际在用的端口（可能是自定义端口）。
+	ServerCmd.PersistentFlags().StringVarP(&flags.Listen, "listen", "l", "0.0.0.0:28777", "监听地址 [env: LITE_LISTEN]")
 	RootCmd.AddCommand(ServerCmd)
 }
 
 func applyHTTPListenDefault(cmd *cobra.Command) {
-	if cmd != nil && cmd.Flags().Changed("listen") {
-		return
-	}
-	if env := GetEnvFirst("", "LITE_LISTEN", "KOMARI_LISTEN"); env != "" {
-		flags.Listen = env
-		return
-	}
 	dataDir := filepath.Join(".", "data")
 	if strings.TrimSpace(flags.DatabaseFile) != "" {
 		if dir := filepath.Dir(flags.DatabaseFile); dir != "" && dir != "." {
 			dataDir = dir
 		}
 	}
-	flags.Listen = dbcore.ResolveDefaultHTTPListen(dataDir)
+	if cmd == nil || !cmd.Flags().Changed("listen") {
+		if env := GetEnvFirst("", "LITE_LISTEN"); env != "" {
+			flags.Listen = env
+		} else {
+			flags.Listen = dbcore.ResolveDefaultHTTPListen(dataDir)
+		}
+	}
+	if err := dbcore.RememberHTTPListen(dataDir, flags.Listen); err != nil {
+		logger.Warnf("server", "persist HTTP listen address: %v", err)
+	}
 }
 
 // RunServer 按显式的生命周期阶段启动服务端。
@@ -65,22 +67,6 @@ func RunServer() {
 		if err != nil {
 			_ = app.Shutdown()
 			logger.Fatalf("server", "server startup failed at %q: %v", "run-first-run-install", err)
-		}
-		if !completed {
-			return
-		}
-	}
-
-	required, summary, err := app.LegacyUpgradeRequired()
-	if err != nil {
-		_ = app.Shutdown()
-		logger.Fatalf("server", "server startup failed at %q: %v", "detect-1.2.7-upgrade", err)
-	}
-	if required {
-		completed, err := app.RunLegacyUpgrade(summary)
-		if err != nil {
-			_ = app.Shutdown()
-			logger.Fatalf("server", "server startup failed at %q: %v", "run-1.2.7-upgrade", err)
 		}
 		if !completed {
 			return

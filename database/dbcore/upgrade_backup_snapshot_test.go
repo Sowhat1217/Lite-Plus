@@ -232,3 +232,80 @@ func TestUpgradeBackupRejectsInstanceKeySQLiteAliases(t *testing.T) {
 		})
 	}
 }
+
+func TestUpgradeBackupPreservesPlusDisableAndUsage(t *testing.T) {
+	root := t.TempDir()
+	data := filepath.Join(root, "data")
+	if err := os.MkdirAll(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(data, "lite.db")
+	db, err := sql.Open("sqlite3", buildSQLiteDSN(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+	for _, query := range []string{
+		`CREATE TABLE nodemgt_node_users (id TEXT PRIMARY KEY, username TEXT, status TEXT, quota_bytes INTEGER, used_bytes INTEGER)`,
+		`CREATE TABLE nodemgt_certs (id TEXT PRIMARY KEY, domain TEXT, fingerprint TEXT)`,
+		`INSERT INTO nodemgt_node_users VALUES ('u1', 'alice', 'disabled', 1000, 250)`,
+		`INSERT INTO nodemgt_certs VALUES ('c1', 'nodemgt.example', 'abc123')`,
+	} {
+		if _, err := db.Exec(query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archive := filepath.Join(root, "upgrade.zip")
+	if err := createUpgradeBackup(db, data, archive, nil); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := zip.OpenReader(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	found := false
+	for _, entry := range reader.File {
+		if entry.Name != "lite.db" {
+			continue
+		}
+		found = true
+		r, err := entry.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		bytes, err := io.ReadAll(r)
+		r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		extracted := filepath.Join(root, "extracted.sqlite")
+		if err := os.WriteFile(extracted, bytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := sql.Open("sqlite3", "file:"+filepath.ToSlash(extracted)+"?mode=ro&immutable=1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var status string
+		var quota, used int64
+		if err := snapshot.QueryRow(`SELECT status, quota_bytes, used_bytes FROM nodemgt_node_users WHERE id = 'u1'`).Scan(&status, &quota, &used); err != nil {
+			snapshot.Close()
+			t.Fatalf("nodemgt user missing from upgrade snapshot: %v", err)
+		}
+		if status != "disabled" || quota != 1000 || used != 250 {
+			snapshot.Close()
+			t.Fatalf("nodemgt quota/disable rolled back in snapshot: status=%s quota=%d used=%d", status, quota, used)
+		}
+		var fingerprint string
+		if err := snapshot.QueryRow(`SELECT fingerprint FROM nodemgt_certs WHERE id = 'c1'`).Scan(&fingerprint); err != nil || fingerprint != "abc123" {
+			snapshot.Close()
+			t.Fatalf("nodemgt cert missing from upgrade snapshot: %q %v", fingerprint, err)
+		}
+		snapshot.Close()
+	}
+	if !found {
+		t.Fatal("upgrade archive omitted lite.db")
+	}
+}

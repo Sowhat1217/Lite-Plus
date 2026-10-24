@@ -16,7 +16,7 @@ Linux 一键更新面向使用官方安装脚本管理的直接安装，包括 s
 
 ## 更新事务
 
-1. 从 `nuomiiiii/lite` 的 GitHub Release 下载当前 CPU 架构的文件。
+1. 从 `nuomiiiii/Lite-Plus` 的 GitHub Release 下载当前 CPU 架构的文件。
 2. 使用 `lite-update.json` 校验版本号、七位构建标识、文件大小和 SHA-256。旧版 Release 仍可能只有 `komari-update.json`，更新器会自动回退读取。
 3. 由独立更新助手停止 Lite（systemd 临时服务，或软路由上已脱离服务进程组的助手）。
 4. 冷备份当前程序和完整 `data` 目录。

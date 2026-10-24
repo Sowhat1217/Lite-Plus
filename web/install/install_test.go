@@ -60,7 +60,7 @@ func installBackupArchive(t *testing.T) []byte {
 	for name, content := range map[string]string{
 		"lite.db":            "sqlite-data",
 		"metrics.db":           "metrics-data",
-		"komari-backup-markup": "full",
+		"lite-backup-markup": "full",
 	} {
 		entry, err := writer.Create(name)
 		if err != nil {

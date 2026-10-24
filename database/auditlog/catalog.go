@@ -26,6 +26,7 @@ var settingLabels = map[string][4]string{
 	"expire_notification_lead_days":    {"提前多少天开始提醒", "Days in Advance to Remind", "何日前から通知を開始しますか", "提早通知天數"},
 	"geo_ip_enabled":                   {"启用地理位置信息", "Enable GeoIP", "地理位置情報を有効にする", "顯示地理位置資訊"},
 	"geo_ip_provider":                  {"地理位置数据提供商", "GeoIP Provider", "地理位置データプロバイダー", "選擇 GeoIP 服務商"},
+	"github_proxy":                     {"GitHub 代理", "GitHub proxy", "GitHub プロキシ", "GitHub Proxy"},
 	"https_certificate_path":           {"证书路径", "Certificate path", "証明書のパス", "憑證路徑"},
 	"https_enabled":                    {"启用内置 HTTPS", "Enable built-in HTTPS", "内蔵 HTTPS を有効化", "啟用內建 HTTPS"},
 	"https_listen":                     {"HTTPS 监听端口", "HTTPS listening port", "HTTPS 待受ポート", "HTTPS 監聽 Port"},

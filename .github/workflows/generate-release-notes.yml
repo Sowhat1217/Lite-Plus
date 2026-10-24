@@ -32,7 +32,7 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
-            const webRepo = { owner, repo: "Lite-web" };
+            const webRepo = { owner, repo: "Lite-Plus-web" };
 
             const AI_CONTEXT_CHAR_LIMIT = 120000;
             const AI_MAX_COMMITS = 160;
@@ -473,7 +473,7 @@ jobs:
               appendWithinLimit(sections, `Commit details:\n${buildCommitContext(comparison.commits)}`, AI_CONTEXT_CHAR_LIMIT);
 
               if (webReleaseSection) {
-                appendWithinLimit(sections, `Lite-web release notes for the same tag:\n${webReleaseSection}`, AI_CONTEXT_CHAR_LIMIT);
+                appendWithinLimit(sections, `Lite-Plus-web release notes for the same tag:\n${webReleaseSection}`, AI_CONTEXT_CHAR_LIMIT);
               }
 
               return sections.join("\n\n---\n\n");
@@ -574,7 +574,7 @@ jobs:
                   content: [
                     "You write accurate release notes for the Lite server project.",
                     "Use only the supplied repository context.",
-                    "Include both Lite server changes and Lite-web frontend changes when frontend release notes are supplied.",
+                    "Include both Lite-Plus server changes and Lite-Plus-web frontend changes when frontend release notes are supplied.",
                     "Prioritize user-visible behavior, compatibility or migration notes, operations/deployment changes, security fixes, and important bug fixes.",
                     "Do not invent features or implementation details that are not supported by the context.",
                     "Write concise Markdown in Simplified Chinese.",
@@ -619,19 +619,19 @@ jobs:
 
                 const webBody = clean(webRelease.body);
                 if (!webBody) {
-                  return `## Lite-web Release Notes\n\nLite-web release [${tag}](${webRelease.html_url}) exists, but its release notes are empty.`;
+                  return `## Lite-Plus-web Release Notes\n\nLite-Plus-web release [${tag}](${webRelease.html_url}) exists, but its release notes are empty.`;
                 }
 
                 return [
-                  "## Lite-web Release Notes",
+                  "## Lite-Plus-web Release Notes",
                   "",
-                  `Source: [Lite-web ${tag}](${webRelease.html_url})`,
+                  `Source: [Lite-Plus-web ${tag}](${webRelease.html_url})`,
                   "",
                   demoteMarkdownHeadings(webBody),
                 ].join("\n");
               } catch (error) {
                 if (error.status === 404) {
-                  core.info(`Lite-web release ${tag} does not exist yet. Skipping web release notes for now.`);
+                  core.info(`Lite-Plus-web release ${tag} does not exist yet. Skipping web release notes for now.`);
                   return "";
                 }
 

@@ -1,0 +1,194 @@
+name: Follow Lite
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      lite_tag:
+        description: Lite stable tag to follow (empty = latest public stable that also exists on Lite-web)
+        required: false
+        type: string
+
+concurrency:
+  group: follow-lite
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  follow:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout Plus
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PLUS_FOLLOW_TOKEN || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+          check-latest: false
+
+      - name: Confirm Go 1.26.10
+        run: |
+          set -euo pipefail
+          go version
+          test "$(go env GOVERSION)" = "go1.26.10"
+          echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Follow Lite tag
+        env:
+          GH_TOKEN: ${{ secrets.PLUS_FOLLOW_TOKEN || github.token }}
+          PLUS_FOLLOW_TOKEN: ${{ secrets.PLUS_FOLLOW_TOKEN }}
+          REQUESTED_TAG: ${{ inputs.lite_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          python3 scripts/plus_follow_test.py
+          python3 scripts/plus_follow.py validate-baseline plus-baseline.json >/tmp/baseline.json
+
+          PLUS="$(python3 -c "import json; print(json.load(open('/tmp/baseline.json'))['plus'])")"
+          BASE_LITE="$(python3 -c "import json; print(json.load(open('/tmp/baseline.json'))['lite'])")"
+          BASE_WEB="$(python3 -c "import json; print(json.load(open('/tmp/baseline.json'))['lite_web'])")"
+          BASE_AGENT="$(python3 -c "import json; print(json.load(open('/tmp/baseline.json'))['lite_agent'])")"
+          BASE_THEME="$(python3 -c "import json; print(json.load(open('/tmp/baseline.json'))['lite_theme'])")"
+          echo "current plus=$PLUS lite=$BASE_LITE lite_web=$BASE_WEB"
+
+          if [ -n "${REQUESTED_TAG:-}" ]; then
+            TAG="$REQUESTED_TAG"
+          else
+            TAG="$(gh api repos/nuomiiiii/Lite/releases --paginate --jq '[.[] | select(.draft==false and .prerelease==false and (.tag_name | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")))] | .[0].tag_name')"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "no Lite stable tag found"
+            exit 1
+          fi
+          if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "refusing non-stable Lite tag: $TAG"
+            exit 1
+          fi
+          echo "follow Lite $TAG"
+
+          if [ "$TAG" = "$BASE_LITE" ] && [ "$TAG" = "$BASE_WEB" ]; then
+            echo "already following $TAG"
+            exit 0
+          fi
+
+          if ! git ls-remote --exit-code https://github.com/nuomiiiii/Lite-web.git "refs/tags/${TAG}" >/dev/null; then
+            echo "Lite-web has no matching stable tag $TAG yet; skip this round"
+            exit 0
+          fi
+
+          if [ -z "${PLUS_FOLLOW_TOKEN:-}" ]; then
+            echo "PLUS_FOLLOW_TOKEN is required to push Lite-Plus-web and dispatch publish-stable-release.yml"
+            exit 1
+          fi
+
+          NEW_PLUS="$(python3 scripts/plus_follow.py bump "$PLUS" "$BASE_LITE" "$TAG")"
+          THEME_REF="$(python3 scripts/plus_follow.py theme-ref "$BASE_THEME")"
+          echo "next plus=$NEW_PLUS theme_ref=$THEME_REF"
+
+          OWNER="${GITHUB_REPOSITORY_OWNER}"
+          WEB_REPO="${OWNER}/Lite-Plus-web"
+          WEB_DIR="$RUNNER_TEMP/Lite-Plus-web"
+          git clone "https://x-access-token:${PLUS_FOLLOW_TOKEN}@github.com/${WEB_REPO}.git" "$WEB_DIR"
+          git -C "$WEB_DIR" checkout main
+          git -C "$WEB_DIR" config user.name "github-actions[bot]"
+          git -C "$WEB_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          open_follow_pr() {
+            local repo_dir="$1"
+            local remote_repo="$2"
+            local body="$3"
+            local branch="follow/lite-$TAG"
+            git -C "$repo_dir" add -A
+            git -C "$repo_dir" commit -m "follow: Lite ${TAG} (needs review)" || true
+            git -C "$repo_dir" checkout -B "$branch"
+            git -C "$repo_dir" push -u "https://x-access-token:${PLUS_FOLLOW_TOKEN}@github.com/${remote_repo}.git" "$branch"
+            gh pr create --repo "$remote_repo" --title "Follow Lite $TAG" --body "$body" || true
+          }
+
+          set +e
+          sh scripts/follow-merge.sh "$WEB_DIR" "https://github.com/nuomiiiii/Lite-web.git" "$TAG" \
+            "$GITHUB_WORKSPACE/scripts/follow-ours-web.txt" \
+            "$GITHUB_WORKSPACE/scripts/follow-c-web.txt"
+          WEB_MERGE=$?
+          set -e
+          if [ "$WEB_MERGE" -ne 0 ]; then
+            open_follow_pr "$WEB_DIR" "$WEB_REPO" "Automatic merge of Lite-web \`$TAG\` failed. Keep Plus brand files, restore nodemgt routes if needed, then re-run Follow Lite."
+            exit 0
+          fi
+
+          python3 scripts/plus_follow.py rewrite-web "$WEB_DIR" "$NEW_PLUS" "$TAG" "$TAG" "$BASE_AGENT" "$BASE_THEME"
+          git -C "$WEB_DIR" add -A
+          git -C "$WEB_DIR" diff --cached --quiet || git -C "$WEB_DIR" commit -m "follow: Lite-web ${TAG} → Plus-web ${NEW_PLUS}"
+
+          (
+            cd "$WEB_DIR"
+            npm ci --no-audit --no-fund
+            npm test
+          )
+
+          set +e
+          sh scripts/follow-merge.sh "$GITHUB_WORKSPACE" "https://github.com/nuomiiiii/Lite.git" "$TAG" \
+            "$GITHUB_WORKSPACE/scripts/follow-ours-server.txt" \
+            "$GITHUB_WORKSPACE/scripts/follow-c-server.txt"
+          SERVER_MERGE=$?
+          set -e
+          if [ "$SERVER_MERGE" -ne 0 ]; then
+            open_follow_pr "$GITHUB_WORKSPACE" "$GITHUB_REPOSITORY" "Automatic merge of Lite \`$TAG\` failed. C-class files must be finished by hand. Do not tag."
+            exit 0
+          fi
+
+          python3 scripts/plus_follow.py rewrite-server "$GITHUB_WORKSPACE" "$NEW_PLUS" "$TAG" "$TAG" "$BASE_AGENT" "$BASE_THEME"
+          go mod tidy
+          go test ./...
+          git add -A
+          git diff --cached --quiet || git commit -m "follow: Lite ${TAG} → Plus ${NEW_PLUS}"
+
+          git -C "$WEB_DIR" push origin HEAD:main
+          git -C "$WEB_DIR" tag "$NEW_PLUS"
+          git -C "$WEB_DIR" push origin "$NEW_PLUS"
+          WEB_SHA="$(git -C "$WEB_DIR" rev-parse HEAD)"
+          gh release create "$NEW_PLUS" \
+            --repo "$WEB_REPO" \
+            --target "$WEB_SHA" \
+            --title "$NEW_PLUS" \
+            --notes "基于 Lite-web ${TAG}。Plus-web ${NEW_PLUS}。"
+
+          for _ in $(seq 1 40); do
+            if gh release view "$NEW_PLUS" --repo "$WEB_REPO" --json assets --jq '.assets[].name' | grep -qx dist-release.zip; then
+              break
+            fi
+            sleep 15
+          done
+          if ! gh release view "$NEW_PLUS" --repo "$WEB_REPO" --json assets --jq '.assets[].name' | grep -qx dist-release.zip; then
+            echo "Lite-Plus-web ${NEW_PLUS} dist-release.zip did not appear"
+            exit 1
+          fi
+
+          git push origin HEAD:main
+          gh workflow run publish-stable-release.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f version="$NEW_PLUS" \
+            -f target_ref=main \
+            -f web_ref="$NEW_PLUS" \
+            -f theme_ref="$THEME_REF"

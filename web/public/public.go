@@ -52,7 +52,7 @@ const themeBundleMigrationKey = "theme_bundle_migration_v1"
 
 const currentThemeBundleMigration = 12
 
-const adminApplicationTitle = "轻量.Lite Monitor"
+const adminApplicationTitle = "Lite-Plus Monitor"
 
 const themeChangeReloadScript = `<script>(()=>{window.addEventListener("storage",(event)=>{if(event.key==="lite-active-theme-changed"||event.key==="komari-active-theme-changed"){window.location.reload();}});})();</script>`
 

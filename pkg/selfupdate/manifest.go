@@ -23,7 +23,8 @@ const (
 	maxBinary          = 256 << 20
 )
 
-var releaseBaseURL = "https://github.com/nuomiiiii/Lite/releases/download"
+// releaseBaseURL is the Plus GitHub release download root. Do not use Lite GitHub releases.
+var releaseBaseURL = "https://github.com/nuomiiiii/Lite-Plus/releases/download"
 
 var (
 	versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
@@ -45,7 +46,22 @@ type ManifestAsset struct {
 	SHA256 string `json:"sha256"`
 }
 
+func ChannelConfigured() bool {
+	base := strings.TrimSpace(releaseBaseURL)
+	if base == "" {
+		return false
+	}
+	lower := strings.ToLower(base)
+	if strings.Contains(lower, "github.com/nuomiiiii/lite/") {
+		return false
+	}
+	return true
+}
+
 func fetchReleaseManifest(version string, client *http.Client) (*Manifest, error) {
+	if !ChannelConfigured() {
+		return nil, errors.New("plus update channel is not configured")
+	}
 	var lastErr error
 	for _, name := range []string{manifestName, legacyManifestName} {
 		manifest, err := fetchManifest(releaseURL(version, name), client)

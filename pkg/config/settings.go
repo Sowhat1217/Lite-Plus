@@ -8,14 +8,14 @@ const (
 	AdminDefaultPageSize    = 20
 	AdminDefaultPageSizeMin = 5
 	AdminDefaultPageSizeMax = 100
-	DefaultSitename         = "轻量.Lite"
-	DefaultSiteDescription  = "轻量.Lite丨更适合MJJ的养老探针"
+	DefaultSitename         = "Lite-Plus"
+	DefaultSiteDescription  = "Lite-Plus"
 )
 
 type Settings struct {
 	ID                     uint   `json:"id,omitempty"`                                             // 1
-	Sitename               string `json:"sitename" default:"轻量.Lite"`                            // 站点名称，默认 "轻量.Lite"
-	Description            string `json:"description" default:"轻量.Lite丨更适合MJJ的养老探针"`     // 站点描述
+	Sitename               string `json:"sitename" default:"Lite-Plus"`                             // 站点名称，默认 "Lite-Plus"
+	Description            string `json:"description" default:"Lite-Plus"`                           // 站点描述
 	AdminDefaultPageSize   int    `json:"admin_default_page_size" default:"20"`                     // 后台列表默认每页条数
 	ReduceMotion           bool   `json:"reduce_motion" default:"false"`                            // 兼容旧库；界面不再提供关闭动效的开关
 	AutoOrderNewClients    bool   `json:"auto_order_new_clients_by_region" default:"false"`         // 新服务器首次识别国家\地区后自动排到同组同国家\地区节点后面，默认关闭
@@ -47,7 +47,7 @@ type Settings struct {
 	DisablePasswordLogin  bool   `json:"disable_password_login" default:"false"`
 	CloudflareTunnelToken string `json:"cloudflare_tunnel_token" default:""`
 	HTTPSEnabled          bool   `json:"https_enabled" default:"false"`
-	HTTPSListen           string `json:"https_listen" default:":36888"`
+	HTTPSListen           string `json:"https_listen" default:":37888"`
 	HTTPSRedirectHTTP     bool   `json:"https_redirect_http" default:"false"`
 	HTTPSCertificatePath  string `json:"https_certificate_path" default:"./data/tls/server.crt"`
 	HTTPSPrivateKeyPath   string `json:"https_private_key_path" default:"./data/tls/server.key"`

@@ -17,12 +17,12 @@ on:
         default: main
         type: string
       web_ref:
-        description: Lite-web branch or tag. Leave empty to use the same x.y.z tag as this release.
+        description: Lite-Plus-web branch or tag. Leave empty to use the same x.y.z tag as this release.
         required: false
         default: ""
         type: string
       theme_ref:
-        description: Lite-theme branch or tag. Leave empty to use main.
+        description: Lite-theme branch or tag. Leave empty to use the pin in plus-baseline.json (v1.2.9).
         required: false
         default: ""
         type: string
@@ -87,27 +87,28 @@ jobs:
 
           WEB_REF="${WEB_REF:-$VERSION}"
           OWNER="${GITHUB_REPOSITORY_OWNER}"
-          WEB_REPO="${OWNER}/Lite-web"
+          WEB_REPO="${OWNER}/Lite-Plus-web"
           if git ls-remote --exit-code "https://github.com/${WEB_REPO}.git" "refs/tags/${WEB_REF}" >/dev/null; then
-            echo "Using Lite-web tag ${WEB_REF}"
+            echo "Using Lite-Plus-web tag ${WEB_REF}"
           elif git ls-remote --exit-code "https://github.com/${WEB_REPO}.git" "refs/heads/${WEB_REF}" >/dev/null; then
-            echo "Using Lite-web branch ${WEB_REF}"
+            echo "Using Lite-Plus-web branch ${WEB_REF}"
           else
-            echo "Lite-web has no tag or branch named ${WEB_REF}. Publish Lite-web ${VERSION} first." >&2
+            echo "Lite-Plus-web has no tag or branch named ${WEB_REF}. Publish Lite-Plus-web ${VERSION} first." >&2
             exit 1
           fi
 
           WEB_VERSION="$(gh api "repos/${WEB_REPO}/contents/package.json?ref=${WEB_REF}" --jq .content | python3 -c "import json,sys,base64; print(json.loads(base64.b64decode(sys.stdin.read()).decode())['version'])")"
           if [ "$WEB_VERSION" != "$VERSION" ]; then
-            echo "Lite-web ${WEB_REF} is version ${WEB_VERSION}, expected ${VERSION}." >&2
+            echo "Lite-Plus-web ${WEB_REF} is version ${WEB_VERSION}, expected ${VERSION}." >&2
             exit 1
           fi
 
+          THEME_REF="$(python3 scripts/plus_follow.py theme-ref "${THEME_REF:-}")"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "version_hash=$VERSION_HASH" >> "$GITHUB_OUTPUT"
           echo "web_ref=$WEB_REF" >> "$GITHUB_OUTPUT"
-          echo "theme_ref=${THEME_REF:-main}" >> "$GITHUB_OUTPUT"
-          echo "Release display version: $VERSION ($VERSION_HASH), Lite-web ${WEB_REF} (${WEB_VERSION})"
+          echo "theme_ref=$THEME_REF" >> "$GITHUB_OUTPUT"
+          echo "Release display version: $VERSION ($VERSION_HASH), Lite-Plus-web ${WEB_REF} (${WEB_VERSION})"
 
       - name: Create version-only tag and release
         env:

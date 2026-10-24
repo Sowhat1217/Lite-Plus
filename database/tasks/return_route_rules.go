@@ -337,7 +337,7 @@ func downloadReturnRouteBGPRules(ctx context.Context, url string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("User-Agent", "Lite-Return-Route (+https://github.com/nuomiiiii/Lite)")
+	request.Header.Set("User-Agent", "Lite-Plus-Return-Route (+https://github.com/nuomiiiii/Lite-Plus)")
 	response, err := returnRouteBGPHTTPClient.Do(request)
 	if err != nil {
 		return nil, err

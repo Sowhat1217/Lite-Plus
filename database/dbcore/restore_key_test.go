@@ -79,14 +79,12 @@ func writeRestoreArchiveBytes(t *testing.T, archivePath string, files map[string
 		}
 	}
 	if _, ok := files["lite-backup-markup"]; !ok {
-		if _, ok := files["komari-backup-markup"]; !ok {
-			marker, err := writer.Create("lite-backup-markup")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := marker.Write([]byte("backup")); err != nil {
-				t.Fatal(err)
-			}
+		marker, err := writer.Create("lite-backup-markup")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := marker.Write([]byte("backup")); err != nil {
+			t.Fatal(err)
 		}
 	}
 	if err := writer.Close(); err != nil {

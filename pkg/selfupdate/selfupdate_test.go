@@ -117,6 +117,36 @@ func TestServiceNamePrefersLiteEnvThenKomariUnit(t *testing.T) {
 	}
 }
 
+func TestServiceNameDefaultsToLitePlus(t *testing.T) {
+	t.Setenv("LITE_SERVICE_MANAGER", "systemd")
+	t.Setenv("LITE_SERVICE_NAME", "")
+	t.Setenv("KOMARI_SERVICE_NAME", "")
+	previous := lookupServicePID
+	t.Cleanup(func() { lookupServicePID = previous })
+	lookupServicePID = func(string) string { return "0" }
+	if got := serviceName(); got != "lite-plus.service" {
+		t.Fatalf("serviceName() = %q, want lite-plus.service", got)
+	}
+}
+
+func TestServiceNameDetectsLegacyLiteUnit(t *testing.T) {
+	t.Setenv("LITE_SERVICE_MANAGER", "systemd")
+	t.Setenv("LITE_SERVICE_NAME", "")
+	t.Setenv("KOMARI_SERVICE_NAME", "")
+	previous := lookupServicePID
+	t.Cleanup(func() { lookupServicePID = previous })
+	pid := strconv.Itoa(os.Getpid())
+	lookupServicePID = func(name string) string {
+		if name == "lite.service" {
+			return pid
+		}
+		return "0"
+	}
+	if got := serviceName(); got != "lite.service" {
+		t.Fatalf("detected serviceName() = %q, want lite.service", got)
+	}
+}
+
 func TestServiceNameKeepsProcdBaseName(t *testing.T) {
 	t.Setenv("LITE_SERVICE_MANAGER", "procd")
 	t.Setenv("LITE_SERVICE_NAME", "lite.service")
@@ -253,8 +283,8 @@ func TestRunProcdServiceRejectsUnknownAction(t *testing.T) {
 	}
 }
 
-func TestLocalHealthURLFallsBackToKomariListen(t *testing.T) {
-	t.Setenv("LITE_LISTEN", "")
+func TestLocalHealthURLUsesLiteListen(t *testing.T) {
+	t.Setenv("LITE_LISTEN", "127.0.0.1:12345")
 	t.Setenv("KOMARI_LISTEN", "0.0.0.0:25774")
 	previous := os.Args
 	t.Cleanup(func() { os.Args = previous })
@@ -263,21 +293,12 @@ func TestLocalHealthURLFallsBackToKomariListen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("localHealthURL() error = %v", err)
 	}
-	if got != "http://127.0.0.1:25774/api/version" {
-		t.Fatalf("localHealthURL() = %q, want Komari listen fallback", got)
-	}
-
-	t.Setenv("LITE_LISTEN", "127.0.0.1:27777")
-	got, err = localHealthURL()
-	if err != nil {
-		t.Fatalf("localHealthURL() error = %v", err)
-	}
-	if got != "http://127.0.0.1:27777/api/version" {
-		t.Fatalf("localHealthURL() = %q, want LITE_LISTEN to win", got)
+	if got != "http://127.0.0.1:12345/api/version" {
+		t.Fatalf("localHealthURL() = %q, want LITE_LISTEN", got)
 	}
 }
 
-func TestConfiguredDatabaseWithinAcceptsKomariDB(t *testing.T) {
+func TestConfiguredDatabaseWithinAcceptsLiteDB(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "data")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
@@ -285,9 +306,9 @@ func TestConfiguredDatabaseWithinAcceptsKomariDB(t *testing.T) {
 	}
 	previous := os.Args
 	t.Cleanup(func() { os.Args = previous })
-	os.Args = []string{"Lite", "-d", "./data/komari.db"}
+	os.Args = []string{"Lite", "-d", "./data/lite.db"}
 	if !configuredDatabaseWithin(dataDir, root) {
-		t.Fatal("komari.db under data/ should stay a managed database path")
+		t.Fatal("lite.db under data/ should stay a managed database path")
 	}
 }
 
@@ -520,6 +541,27 @@ func assertFileContent(t *testing.T, path, want string) {
 	}
 	if string(content) != want {
 		t.Fatalf("content of %s = %q, want %q", path, content, want)
+	}
+}
+
+func TestFetchReleaseManifestRequiresPlusChannel(t *testing.T) {
+	previous := releaseBaseURL
+	t.Cleanup(func() { releaseBaseURL = previous })
+
+	releaseBaseURL = ""
+	if ChannelConfigured() {
+		t.Fatal("empty releaseBaseURL must not count as a Plus channel")
+	}
+	if _, err := fetchReleaseManifest("2.2.5", http.DefaultClient); err == nil {
+		t.Fatal("fetchReleaseManifest() unexpectedly succeeded without a channel")
+	}
+
+	releaseBaseURL = "https://github.com/nuomiiiii/Lite/releases/download"
+	if ChannelConfigured() {
+		t.Fatal("Lite GitHub releases must not count as a Plus channel")
+	}
+	if _, err := fetchReleaseManifest("2.2.5", http.DefaultClient); err == nil {
+		t.Fatal("fetchReleaseManifest() unexpectedly succeeded for Lite GitHub")
 	}
 }
 

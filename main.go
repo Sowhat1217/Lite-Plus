@@ -21,7 +21,7 @@ func main() {
 		logger.Setup(slog.LevelInfo)
 	}
 
-	logger.Infof("server", "Lite %s (%s)", utils.CurrentVersion, utils.VersionHash)
+	logger.Infof("server", "Lite-Plus %s (%s)", utils.CurrentVersion, utils.VersionHash)
 
 	cmd.Execute()
 }

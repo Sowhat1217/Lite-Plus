@@ -1,24 +1,24 @@
 name: Build system UI
-description: Clone Lite-web and Lite-theme, build the system UI and bundled public theme, and optionally upload them as an artifact.
+description: Clone Lite-Plus-web and Lite-theme, build the system UI and bundled public theme, and optionally upload them as an artifact.
 
 inputs:
   node-version:
     description: Node.js version used to build Lite-web and Lite-theme.
     default: "24"
   repository:
-    description: Lite-web Git clone URL. Leave empty to use the sibling repo under the current GitHub owner.
+    description: Lite-Plus-web Git clone URL. Leave empty to use the sibling repo under the current GitHub owner.
     default: ""
   ref:
-    description: Optional Lite-web ref to build. Uses the repository default branch when empty.
+    description: Optional Lite-Plus-web ref to build. Uses the repository default branch when empty.
     default: main
   theme-repository:
     description: Lite-theme Git clone URL. Leave empty to use the sibling repo under the current GitHub owner.
     default: ""
   theme-ref:
-    description: Optional Lite-theme ref to build. Uses main when empty.
-    default: main
+    description: Optional Lite-theme ref to build. Empty uses the pin in plus-baseline.json (v1.2.9).
+    default: ""
   expected-version:
-    description: If set, fail unless Lite-web package.json version matches this x.y.z.
+    description: If set, fail unless Lite-Plus-web package.json version matches this x.y.z.
     default: ""
   artifact-name:
     description: Optional artifact name for the packed system UI and bundled theme.
@@ -41,7 +41,7 @@ runs:
         rm -rf Lite-web
         repo="${{ inputs.repository }}"
         if [ -z "$repo" ]; then
-          repo="https://github.com/${owner}/Lite-web"
+          repo="https://github.com/${owner}/Lite-Plus-web"
         fi
         if [ -n "${{ inputs.ref }}" ]; then
           git clone --depth=1 --branch "${{ inputs.ref }}" "$repo" Lite-web
@@ -53,7 +53,7 @@ runs:
         if [ -n "$expected" ]; then
           web_version="$(node -p "require('./package.json').version")"
           if [ "$web_version" != "$expected" ]; then
-            echo "Lite-web package.json version is ${web_version}, expected ${expected}." >&2
+            echo "Lite-Plus-web package.json version is ${web_version}, expected ${expected}." >&2
             git log -1 --oneline
             exit 1
           fi
@@ -74,7 +74,12 @@ runs:
         fi
         theme_ref="${{ inputs.theme-ref }}"
         if [ -z "$theme_ref" ]; then
-          theme_ref="main"
+          follow_py="${GITHUB_ACTION_PATH}/../../scripts/plus_follow.py"
+          if [ -f "$follow_py" ]; then
+            theme_ref="$(python3 "$follow_py" theme-ref "")"
+          else
+            theme_ref="v1.2.9"
+          fi
         fi
         git clone --depth=1 --branch "$theme_ref" "$theme_repo" "$theme_dir"
         (

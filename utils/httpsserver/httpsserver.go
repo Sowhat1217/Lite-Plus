@@ -25,7 +25,7 @@ import (
 
 type Settings struct {
 	Enabled         bool   `json:"https_enabled" default:"false"`
-	Listen          string `json:"https_listen" default:":36888"`
+	Listen          string `json:"https_listen" default:":37888"`
 	RedirectHTTP    bool   `json:"https_redirect_http" default:"false"`
 	CertificatePath string `json:"https_certificate_path" default:"./data/tls/server.crt"`
 	PrivateKeyPath  string `json:"https_private_key_path" default:"./data/tls/server.key"`
@@ -254,7 +254,7 @@ func LoadSettings() (Settings, error) {
 func Normalize(settings Settings) (Settings, error) {
 	settings.Listen = strings.TrimSpace(settings.Listen)
 	if settings.Listen == "" {
-		settings.Listen = ":36888"
+		settings.Listen = ":37888"
 	}
 	if !strings.Contains(settings.Listen, ":") {
 		settings.Listen = ":" + settings.Listen

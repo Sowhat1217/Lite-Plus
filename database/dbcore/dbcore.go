@@ -17,6 +17,7 @@ import (
 	"github.com/nuomiiiii/lite/cmd/flags"
 	"github.com/nuomiiiii/lite/database/billing"
 	"github.com/nuomiiiii/lite/database/models"
+	nodemgtstore "github.com/nuomiiiii/lite/nodemgt/store"
 	"github.com/nuomiiiii/lite/pkg/config"
 	"github.com/nuomiiiii/lite/pkg/migrations"
 	"github.com/nuomiiiii/lite/utils/instancekey"
@@ -595,7 +596,7 @@ func restoreStagedBackup(dataDir string) (*stagedRestore, error) {
 	}
 	mainDB, err := alignStagedMainDatabase(stageDir)
 	if err != nil {
-		return nil, fmt.Errorf("adopt restored Komari database: %w", err)
+		return nil, fmt.Errorf("adopt restored Lite database: %w", err)
 	}
 	if err := validateRestoredSQLite(mainDB, filepath.Base(mainDB)); err != nil {
 		return nil, err
@@ -615,7 +616,6 @@ func restoreStagedBackup(dataDir string) (*stagedRestore, error) {
 		return nil, fmt.Errorf("inspect restored metrics.db: %w", err)
 	}
 	_ = os.Remove(filepath.Join(stageDir, "lite-backup-markup"))
-	_ = os.Remove(filepath.Join(stageDir, "komari-backup-markup"))
 	if err := os.MkdirAll(filepath.Join(stageDir, "theme"), 0o755); err != nil {
 		return nil, fmt.Errorf("prepare restored theme directory: %w", err)
 	}
@@ -719,26 +719,6 @@ var versionID string
 // 用于区分“全新安装”与“从旧版升级（无版本标记）”。在 doInitialize 打开数据库
 // 之前采集。
 var dbFileExistedAtStartup bool
-
-// preserveLegacyHTTPSListen keeps the previous HTTPS listen address when
-// upgrading an existing Komari / Komari Lite data directory. Missing keys are
-// filled with :35938 instead of Lite's new-install default :36888.
-func preserveLegacyHTTPSListen() error {
-	if instance == nil {
-		return nil
-	}
-	if !KeepLegacyHTTPListen(filepath.Dir(resolveDatabaseFile())) {
-		return nil
-	}
-	var count int64
-	if err := instance.Model(&config.ConfigItem{}).Where("key = ?", config.HTTPSListenKey).Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-	return config.Set(config.HTTPSListenKey, ":35938")
-}
 
 // SetVersionID 设置当前构建的版本标识（通常为 CurrentVersion+"-"+VersionHash），
 // 用于版本升级检测与自动备份。应在 Initialize() 之前调用；为空则跳过升级备份。
@@ -952,9 +932,6 @@ func doInitialize() error {
 	if err != nil {
 		return fmt.Errorf("restore staged backup: %w", err)
 	}
-	if err := adoptLegacyKomariSQLite(); err != nil {
-		return fmt.Errorf("adopt Komari Lite database: %w", err)
-	}
 	initialized := false
 	defer func() {
 		if initialized || pendingRestore == nil {
@@ -1026,9 +1003,6 @@ func doInitialize() error {
 		return fmt.Errorf("failed to run startup migrations: %w", err)
 	}
 	config.SetDb(instance)
-	if err := preserveLegacyHTTPSListen(); err != nil {
-		return fmt.Errorf("preserve HTTPS listen: %w", err)
-	}
 
 	// 配置库就绪后、执行后续 AutoMigrate 与一次性 metrics 迁移之前：
 	// 基于配置中的版本标记检测升级并自动备份 ./data，便于回滚。
@@ -1082,6 +1056,9 @@ func doInitialize() error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create tables: %w", err)
+	}
+	if err := nodemgtstore.New(instance).Migrate(); err != nil {
+		return fmt.Errorf("failed to create nodemgt tables: %w", err)
 	}
 	if err := migrations.MigrateExpiryBeijingMidnight(instance); err != nil {
 		return fmt.Errorf("failed to migrate expiry timezones: %w", err)

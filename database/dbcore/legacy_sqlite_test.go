@@ -9,145 +9,119 @@ import (
 	"github.com/nuomiiiii/lite/cmd/flags"
 )
 
-func TestAdoptLegacyKomariSQLiteRenamesDefaultFiles(t *testing.T) {
+func TestResolveDefaultHTTPListenUsesPlusPortOnFreshDir(t *testing.T) {
+	dir := t.TempDir()
+	if got := ResolveDefaultHTTPListen(dir); got != defaultPlusHTTPListen {
+		t.Fatalf("fresh dir = %q, want %q", got, defaultPlusHTTPListen)
+	}
+}
+
+func TestResolveDefaultHTTPListenKeepsCustomMarker(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".http-listen"), []byte("127.0.0.1:18080\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveDefaultHTTPListen(dir); got != "127.0.0.1:18080" {
+		t.Fatalf("custom marker = %q, want 127.0.0.1:18080", got)
+	}
+}
+
+func TestResolveDefaultHTTPListenReadsLiteLegacyMarker(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".legacy-http-listen"), []byte("0.0.0.0:19090\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveDefaultHTTPListen(dir); got != "0.0.0.0:19090" {
+		t.Fatalf("lite marker = %q, want the stored address", got)
+	}
+}
+
+func TestResolveDefaultHTTPListenReadsCustomLiteEnvPort(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "lite.db"), []byte("db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "lite.env"), []byte("LISTEN_PORT=12345\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveDefaultHTTPListen(dir); got != "0.0.0.0:12345" {
+		t.Fatalf("lite.env = %q, want 0.0.0.0:12345", got)
+	}
+}
+
+func TestResolveDefaultHTTPListenDoesNotJumpExistingLiteDBToPlusDefault(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "lite.db"), []byte("db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := ResolveDefaultHTTPListen(dir)
+	if got == defaultPlusHTTPListen {
+		t.Fatalf("existing lite.db jumped to Plus default %q", got)
+	}
+	if got != "0.0.0.0:27777" {
+		t.Fatalf("unspecified Lite data = %q, want Lite's previous unspecified listen", got)
+	}
+}
+
+func TestRememberHTTPListenPersistsCustomAddress(t *testing.T) {
+	dir := t.TempDir()
+	if err := RememberHTTPListen(dir, "127.0.0.1:9443"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveDefaultHTTPListen(dir); got != "127.0.0.1:9443" {
+		t.Fatalf("remembered = %q", got)
+	}
+}
+
+func TestAlignStagedMainDatabaseIgnoresKomariDatabase(t *testing.T) {
 	dir := t.TempDir()
 	previous := flags.DatabaseFile
 	t.Cleanup(func() { flags.DatabaseFile = previous })
 	flags.DatabaseFile = filepath.Join(dir, "lite.db")
-
-	if err := os.WriteFile(filepath.Join(dir, "komari.db"), []byte("db"), 0o600); err != nil {
+	stage := filepath.Join(dir, "stage")
+	if err := os.MkdirAll(stage, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "komari.db-wal"), []byte("wal"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stage, "komari.db"), []byte("komari"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := adoptLegacyKomariSQLite(); err != nil {
-		t.Fatalf("adopt: %v", err)
+	target, err := alignStagedMainDatabase(stage)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "lite.db")); err != nil {
-		t.Fatalf("lite.db missing: %v", err)
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("komari.db must not be adopted as lite.db, target=%s err=%v", target, err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "lite.db-wal")); err != nil {
-		t.Fatalf("lite.db-wal missing: %v", err)
+	komari, err := os.ReadFile(filepath.Join(stage, "komari.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "komari.db")); !os.IsNotExist(err) {
-		t.Fatalf("komari.db should have been renamed, err=%v", err)
-	}
-	if !KeepLegacyHTTPListen(dir) {
-		t.Fatal("adopting komari.db should keep the previous HTTP listen port")
+	if string(komari) != "komari" {
+		t.Fatalf("komari.db changed: %q", komari)
 	}
 }
 
-func TestAdoptLegacyKomariSQLiteLeavesExistingLiteDB(t *testing.T) {
+func TestAlignStagedMainDatabaseKeepsLiteDatabase(t *testing.T) {
 	dir := t.TempDir()
 	previous := flags.DatabaseFile
 	t.Cleanup(func() { flags.DatabaseFile = previous })
 	flags.DatabaseFile = filepath.Join(dir, "lite.db")
-
-	if err := os.WriteFile(filepath.Join(dir, "lite.db"), []byte("lite"), 0o600); err != nil {
+	stage := filepath.Join(dir, "stage")
+	if err := os.MkdirAll(stage, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "komari.db"), []byte("komari"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stage, "lite.db"), []byte("lite"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := adoptLegacyKomariSQLite(); err != nil {
-		t.Fatalf("adopt: %v", err)
-	}
-	lite, err := os.ReadFile(filepath.Join(dir, "lite.db"))
+	target, err := alignStagedMainDatabase(stage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(lite) != "lite" {
-		t.Fatalf("existing lite.db overwritten: %q", lite)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "komari.db")); err != nil {
-		t.Fatalf("legacy file should remain when lite.db exists: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".legacy-http-listen")); !os.IsNotExist(err) {
-		t.Fatal("existing lite.db must not write a legacy listen marker")
-	}
-}
-
-func TestKeepLegacyHTTPListenSeesKomariDatabase(t *testing.T) {
-	dir := t.TempDir()
-	if KeepLegacyHTTPListen(dir) {
-		t.Fatal("empty data dir should use the Lite listen default")
-	}
-	if err := os.WriteFile(filepath.Join(dir, "komari.db"), []byte("db"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if !KeepLegacyHTTPListen(dir) {
-		t.Fatal("komari.db should keep HTTP listen on 25774")
-	}
-	if got := ResolveDefaultHTTPListen(dir); got != defaultLegacyHTTPListen {
-		t.Fatalf("resolve = %q, want %q", got, defaultLegacyHTTPListen)
-	}
-}
-
-func TestResolveDefaultHTTPListenReadsCustomMarker(t *testing.T) {
-	dir := t.TempDir()
-	if got := ResolveDefaultHTTPListen(dir); got != defaultLiteHTTPListen {
-		t.Fatalf("fresh dir = %q, want %q", got, defaultLiteHTTPListen)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ".legacy-http-listen"), []byte("0.0.0.0:18080\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got := ResolveDefaultHTTPListen(dir); got != "0.0.0.0:18080" {
-		t.Fatalf("custom marker = %q, want 0.0.0.0:18080", got)
-	}
-}
-
-func TestAdoptLegacyKomariSQLiteWritesListenMarkerFromFlags(t *testing.T) {
-	dir := t.TempDir()
-	previousDB := flags.DatabaseFile
-	previousListen := flags.Listen
-	t.Cleanup(func() {
-		flags.DatabaseFile = previousDB
-		flags.Listen = previousListen
-	})
-	flags.DatabaseFile = filepath.Join(dir, "lite.db")
-	flags.Listen = "127.0.0.1:19090"
-	if err := os.WriteFile(filepath.Join(dir, "komari.db"), []byte("db"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := adoptLegacyKomariSQLite(); err != nil {
-		t.Fatalf("adopt: %v", err)
-	}
-	content, err := os.ReadFile(filepath.Join(dir, ".legacy-http-listen"))
+	got, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(string(content)); got != "127.0.0.1:19090" {
-		t.Fatalf("marker = %q, want the previous listen address", got)
-	}
-	if got := ResolveDefaultHTTPListen(dir); got != "127.0.0.1:19090" {
-		t.Fatalf("resolve after adopt = %q", got)
-	}
-}
-
-func TestAdoptLegacyKomariSQLiteIgnoresLiteDefaultListen(t *testing.T) {
-	dir := t.TempDir()
-	previousDB := flags.DatabaseFile
-	previousListen := flags.Listen
-	t.Cleanup(func() {
-		flags.DatabaseFile = previousDB
-		flags.Listen = previousListen
-	})
-	flags.DatabaseFile = filepath.Join(dir, "lite.db")
-	flags.Listen = defaultLiteHTTPListen
-	if err := os.WriteFile(filepath.Join(dir, "komari.db"), []byte("db"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := adoptLegacyKomariSQLite(); err != nil {
-		t.Fatalf("adopt: %v", err)
-	}
-	content, err := os.ReadFile(filepath.Join(dir, ".legacy-http-listen"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.TrimSpace(string(content)); got != defaultLegacyHTTPListen {
-		t.Fatalf("marker = %q, want %q so upgrade does not jump to 27777", got, defaultLegacyHTTPListen)
+	if strings.TrimSpace(string(got)) != "lite" {
+		t.Fatalf("lite.db = %q", got)
 	}
 }

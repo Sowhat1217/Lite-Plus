@@ -118,6 +118,17 @@ func TestValidateArchiveAcceptsFullAndConfigurationPackages(t *testing.T) {
 			"metrics.db":         "history",
 			"lite-backup-markup": "full",
 		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateArchive(writeTestArchive(t, entries)); err != nil {
+				t.Fatalf("ValidateArchive rejected package: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateArchiveRejectsKomariPackages(t *testing.T) {
+	for name, entries := range map[string]map[string]string{
 		"legacy komari markup": {
 			"lite.db":              "main",
 			"komari-backup-markup": "config",
@@ -133,8 +144,8 @@ func TestValidateArchiveAcceptsFullAndConfigurationPackages(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := ValidateArchive(writeTestArchive(t, entries)); err != nil {
-				t.Fatalf("ValidateArchive rejected package: %v", err)
+			if err := ValidateArchive(writeTestArchive(t, entries)); err == nil {
+				t.Fatal("ValidateArchive accepted Komari package")
 			}
 		})
 	}

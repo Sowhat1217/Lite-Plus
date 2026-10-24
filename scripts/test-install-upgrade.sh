@@ -21,6 +21,14 @@ if ! grep -q 'LITE_SERVICE_MANAGER=procd' "$INSTALLER_PATH"; then
     echo "FAIL: install-lite.sh does not create a procd service" >&2
     exit 1
 fi
+if ! grep -q 'SERVICE_NAME="lite-plus"' "$INSTALLER_PATH"; then
+    echo "FAIL: install-lite.sh default service name is not lite-plus" >&2
+    exit 1
+fi
+if ! grep -q 'LEGACY_SERVICE_NAME="lite"' "$INSTALLER_PATH"; then
+    echo "FAIL: install-lite.sh does not migrate from lite.service" >&2
+    exit 1
+fi
 if ! grep -q 'download_file' "$INSTALLER_PATH" || ! grep -q 'wget' "$INSTALLER_PATH"; then
     echo "FAIL: install-lite.sh does not support wget downloads" >&2
     exit 1
@@ -184,6 +192,8 @@ run_case() (
     systemctl() { apply_service_action "$1"; }
     service_ctl() { apply_service_action "$1"; }
     service_is_active() { [ "$service_active" -eq 1 ]; }
+    legacy_unit_present() { return 1; }
+    migrate_legacy_service() { :; }
     create_service() {
         printf '%s' "$1" > "$root/refreshed-port"
         mkdir -p "$INSTALL_DIR"
@@ -261,17 +271,17 @@ run_procd_unit_case() (
     DATA_DIR="$INSTALL_DIR"
     BINARY_PATH="$INSTALL_DIR/Lite"
     ENV_FILE="$INSTALL_DIR/lite.env"
-    SERVICE_NAME="lite"
+    SERVICE_NAME="lite-plus"
     SERVICE_MANAGER="procd"
     mkdir -p "$INSTALL_DIR" "$root/init.d"
-    initd_script() { printf '%s\n' "$root/init.d/lite"; }
-    pid_file() { printf '%s\n' "$root/run/lite.pid"; }
+    initd_script() { printf '%s\n' "$root/init.d/lite-plus"; }
+    pid_file() { printf '%s\n' "$root/run/lite-plus.pid"; }
     mkdir -p "$root/run"
     log_step() { :; }
     log_success() { :; }
     create_procd_service 36888
     write_env_file 36888
-    script="$root/init.d/lite"
+    script="$root/init.d/lite-plus"
     assert_file_contains "$script" 'USE_PROCD=1'
     assert_file_contains "$script" 'LITE_DEPLOYMENT=linux'
     assert_file_contains "$script" 'LITE_SERVICE_MANAGER=procd'
@@ -282,6 +292,43 @@ run_procd_unit_case() (
     extracted=$(extract_listen_port_from_service)
     [ "$extracted" = "36888" ] || fail "extract_listen_port_from_service = $extracted"
     echo "PASS: procd unit template"
+)
+
+run_migrate_case() (
+    set -eu
+    local root
+    root=$(mktemp -d) || exit 1
+    trap 'rm -rf "$root"' EXIT
+    SERVICE_NAME="lite-plus"
+    LEGACY_SERVICE_NAME="lite"
+    SERVICE_MANAGER="systemd"
+    systemd_unit_file() { printf '%s\n' "$root/lite-plus.service"; }
+    legacy_systemd_unit_file() { printf '%s\n' "$root/lite.service"; }
+    cat > "$root/lite.service" << 'EOF'
+Description=Lite Service
+EOF
+    log_step() { :; }
+    systemctl() { :; }
+    migrate_legacy_service
+    [ ! -f "$root/lite.service" ] || fail "legacy lite.service was not removed"
+    echo "PASS: migrate lite.service to lite-plus.service"
+)
+
+run_legacy_port_extract_case() (
+    set -eu
+    local root
+    root=$(mktemp -d) || exit 1
+    trap 'rm -rf "$root"' EXIT
+    SERVICE_MANAGER="systemd"
+    systemd_unit_file() { printf '%s\n' "$root/missing.service"; }
+    legacy_systemd_unit_file() { printf '%s\n' "$root/lite.service"; }
+    cat > "$root/lite.service" << 'EOF'
+ExecStart=/opt/lite/Lite server -l 0.0.0.0:27777
+Environment=LITE_LISTEN=0.0.0.0:27777
+EOF
+    extracted=$(extract_listen_port_from_service)
+    [ "$extracted" = "27777" ] || fail "legacy systemd extract_listen_port_from_service = $extracted"
+    echo "PASS: legacy lite.service listen port extract"
 )
 
 run_port_extract_case() (
@@ -314,3 +361,5 @@ run_case "new service start failure" start
 run_download_case
 run_procd_unit_case
 run_port_extract_case
+run_migrate_case
+run_legacy_port_extract_case

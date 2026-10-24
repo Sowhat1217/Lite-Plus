@@ -110,9 +110,9 @@ func RunMetricStoreMigrations(ctx MetricContext) error {
 	return nil
 }
 
-// LegacyMonitoringMigrationRequired reports whether startup must enter the
-// restricted 1.2.7 upgrade flow. Empty legacy tables are handled by the normal
-// one-shot migration so fresh installations never see the wizard.
+// LegacyMonitoringMigrationRequired reports leftover Komari-era monitoring
+// tables. Lite Plus does not run a startup wizard for them; empty leftover
+// tables are imported by the normal one-shot metric-store migration.
 func LegacyMonitoringMigrationRequired(db *gorm.DB) (bool, LegacyMonitoringSummary, error) {
 	summary, err := InspectLegacyMonitoring(db)
 	if err != nil {

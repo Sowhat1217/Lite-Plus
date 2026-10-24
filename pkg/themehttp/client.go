@@ -23,7 +23,7 @@ const (
 
 	maxRedirects = 10
 
-	UserAgent = "Lite (+https://github.com/nuomiiiii/Lite)"
+	UserAgent = "Lite-Plus (+https://github.com/nuomiiiii/Lite-Plus)"
 )
 
 type LookupNetIPFunc func(ctx context.Context, network, host string) ([]netip.Addr, error)

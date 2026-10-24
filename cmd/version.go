@@ -12,7 +12,7 @@ var versionJSON bool
 
 var VersionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print the 轻量.Lite version",
+	Short: "Print the Lite-Plus version",
 	RunE: func(_ *cobra.Command, _ []string) error {
 		if versionJSON {
 			return json.NewEncoder(RootCmd.OutOrStdout()).Encode(map[string]string{

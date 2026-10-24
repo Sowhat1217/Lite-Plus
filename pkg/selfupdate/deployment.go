@@ -21,7 +21,7 @@ const (
 	DeploymentLinux   = "linux"
 	DeploymentWindows = "windows"
 	DeploymentUnknown = "unknown"
-	defaultService    = "lite.service"
+	defaultService    = "lite-plus.service"
 	managerSystemd    = "systemd"
 	managerProcd      = "procd"
 )
@@ -126,6 +126,10 @@ func DetectCapability() Capability {
 	}
 	if isMountPoint(dataDir) {
 		result.Reason = "data_directory_is_mount"
+		return result
+	}
+	if !ChannelConfigured() {
+		result.Reason = "channel_unavailable"
 		return result
 	}
 
@@ -239,8 +243,8 @@ func detectServiceManager() string {
 	case managerSystemd:
 		return managerSystemd
 	}
-	// systemd-run helpers do not inherit lite.service env. Treat a live
-	// systemd host as systemd so 2.3.2 Linux installs keep using systemctl.
+	// systemd-run helpers do not inherit lite-plus.service env. Treat a live
+	// systemd host as systemd so Linux installs keep using systemctl.
 	if _, err := os.Stat("/run/systemd/system"); err == nil {
 		return managerSystemd
 	}
@@ -336,7 +340,7 @@ func serviceName() string {
 		return name
 	}
 	pid := strconv.Itoa(os.Getpid())
-	for _, name := range []string{defaultService, "komari.service"} {
+	for _, name := range []string{defaultService, "lite.service", "komari.service"} {
 		if lookupServicePID(name) == pid {
 			return name
 		}
@@ -345,12 +349,12 @@ func serviceName() string {
 }
 
 func localHealthURL() (string, error) {
-	listen := firstEnv("LITE_LISTEN", "KOMARI_LISTEN")
+	listen := firstEnv("LITE_LISTEN")
 	if listen == "" {
 		listen = strings.TrimSpace(flags.Listen)
 	}
 	if listen == "" {
-		listen = "0.0.0.0:27777"
+		listen = "0.0.0.0:28777"
 	}
 	for i := 1; i < len(os.Args); i++ {
 		arg := os.Args[i]

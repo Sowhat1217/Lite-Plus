@@ -1,0 +1,690 @@
+package store
+
+import (
+	"fmt"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/nuomiiiii/lite/nodemgt/models"
+	"github.com/nuomiiiii/lite/utils/instancekey"
+	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+func TestMain(m *testing.M) {
+	cleanup := instancekey.SetupTempFileForTest()
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
+}
+
+func testDB(t *testing.T) *Store {
+	t.Helper()
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", uuid.NewString())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{NowFunc: func() time.Time { return time.Now().UTC() }})
+	require.NoError(t, err)
+	st := New(db)
+	require.NoError(t, st.Migrate())
+	return st
+}
+
+func TestPlusTablesMigrated(t *testing.T) {
+	st := testDB(t)
+	sqlDB, err := st.DB().DB()
+	require.NoError(t, err)
+	rows, err := sqlDB.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'nodemgt_%' ORDER BY name`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		names = append(names, name)
+	}
+	require.Contains(t, names, "nodemgt_inbounds")
+	require.Contains(t, names, "nodemgt_node_users")
+	require.Contains(t, names, "nodemgt_credentials")
+	require.Contains(t, names, "nodemgt_plans")
+	require.Contains(t, names, "nodemgt_quota_ledger")
+	require.Contains(t, names, "nodemgt_control_commands")
+	require.Contains(t, names, "nodemgt_certs")
+	require.Contains(t, names, "nodemgt_subscriptions")
+	require.Contains(t, names, "nodemgt_grants")
+	require.Contains(t, names, "nodemgt_user_ips")
+	require.Contains(t, names, "nodemgt_user_extra_links")
+}
+
+func TestUserPresenceOnlineAndClear(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "alice"}
+	require.NoError(t, st.UpsertUser(user))
+	require.NoError(t, st.RecordUserPresence("n1", user.ID, true, []UserIPView{
+		{IP: "203.0.113.10", SeenAt: time.Now().UTC()},
+		{IP: "203.0.113.11"},
+	}))
+	views, err := st.ListUserViews("")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.True(t, views[0].Online)
+	require.Len(t, views[0].OnlineIPs, 2)
+	require.NoError(t, st.ClearUserIPs(user.ID))
+	views, err = st.ListUserViews("")
+	require.NoError(t, err)
+	require.True(t, views[0].Online)
+	require.Empty(t, views[0].OnlineIPs)
+}
+
+func TestUserPresenceOfflineReplayAfterClearStaysEmpty(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "offline-history"}
+	require.NoError(t, st.UpsertUser(user))
+	seenAt := time.Date(2026, 10, 24, 3, 0, 0, 0, time.UTC)
+	ips := []UserIPView{{IP: "172.18.0.1", SeenAt: seenAt}}
+	require.NoError(t, st.RecordUserPresence("n1", user.ID, false, ips))
+	before, err := st.ListUserIPs(user.ID)
+	require.NoError(t, err)
+	require.Empty(t, before)
+	require.NoError(t, st.ClearUserIPs(user.ID))
+	cleared, err := st.ListUserIPs(user.ID)
+	require.NoError(t, err)
+	require.Empty(t, cleared)
+	require.NoError(t, st.RecordUserPresence("n1", user.ID, false, ips))
+	after, err := st.ListUserIPs(user.ID)
+	require.NoError(t, err)
+	require.Empty(t, after)
+	require.NoError(t, st.RecordUserPresence("n1", user.ID, true, []UserIPView{
+		{IP: "172.18.0.1", SeenAt: time.Now().UTC().Add(2 * time.Second)},
+	}))
+	fresh, err := st.ListUserIPs(user.ID)
+	require.NoError(t, err)
+	require.Len(t, fresh, 1)
+	require.Equal(t, "172.18.0.1", fresh[0].IP)
+}
+
+func TestUserPresenceOfflineClearsLiveIPs(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "was-online"}
+	require.NoError(t, st.UpsertUser(user))
+	require.NoError(t, st.RecordUserPresence("n1", user.ID, true, []UserIPView{
+		{IP: "203.0.113.20"},
+	}))
+	require.NoError(t, st.RecordUserPresence("n1", user.ID, false, []UserIPView{
+		{IP: "203.0.113.20"},
+	}))
+	stored, err := st.ListUserIPs(user.ID)
+	require.NoError(t, err)
+	require.Empty(t, stored)
+	views, err := st.ListUserViews("")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.False(t, views[0].Online)
+	require.Empty(t, views[0].OnlineIPs)
+}
+
+func TestUserPresenceKeepsConcurrentIPsOnly(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "swap-ip"}
+	require.NoError(t, st.UpsertUser(user))
+	require.NoError(t, st.RecordUserPresence("n1", user.ID, true, []UserIPView{
+		{IP: "203.0.113.30"},
+		{IP: "203.0.113.31"},
+	}))
+	require.NoError(t, st.RecordUserPresence("n1", user.ID, true, []UserIPView{
+		{IP: "203.0.113.31"},
+	}))
+	stored, err := st.ListUserIPs(user.ID)
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	require.Equal(t, "203.0.113.31", stored[0].IP)
+	views, err := st.ListUserViews("")
+	require.NoError(t, err)
+	require.True(t, views[0].Online)
+	require.Len(t, views[0].OnlineIPs, 1)
+	require.Equal(t, "203.0.113.31", views[0].OnlineIPs[0].IP)
+}
+
+func TestUserPresenceHidesStaleIPsFromViews(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "stale-ip"}
+	require.NoError(t, st.UpsertUser(user))
+	require.NoError(t, st.RecordUserPresence("n1", user.ID, true, []UserIPView{
+		{IP: "203.0.113.40"},
+	}))
+	require.NoError(t, st.DB().Model(&models.UserIP{}).Where("user_id = ?", user.ID).Update("seen_at", time.Now().UTC().Add(-time.Hour)).Error)
+	views, err := st.ListUserViews("")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.True(t, views[0].Online)
+	require.Empty(t, views[0].OnlineIPs)
+}
+
+func TestUserPresenceSameIPOnTwoNodesKeepsOtherOnline(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "node-a", Username: "shared-ip"}
+	require.NoError(t, st.UpsertUser(user))
+	a := &models.Inbound{NodeUUID: "node-a", Name: "a", Protocol: "vless", Port: 10001, Enabled: true}
+	b := &models.Inbound{NodeUUID: "node-b", Name: "b", Protocol: "vless", Port: 10002, Enabled: true}
+	require.NoError(t, st.UpsertInbound(a))
+	require.NoError(t, st.UpsertInbound(b))
+	require.NoError(t, st.ReplaceGrants(user.ID, []string{a.ID, b.ID}))
+	ip := []UserIPView{{IP: "203.0.113.10"}}
+	require.NoError(t, st.RecordUserPresence("node-a", user.ID, true, ip))
+	require.NoError(t, st.RecordUserPresence("node-b", user.ID, true, ip))
+	stored, err := st.ListUserIPs(user.ID)
+	require.NoError(t, err)
+	require.Len(t, stored, 2)
+	views, err := st.ListUserViews("")
+	require.NoError(t, err)
+	require.True(t, views[0].Online)
+	require.Len(t, views[0].OnlineIPs, 1)
+	require.Equal(t, "203.0.113.10", views[0].OnlineIPs[0].IP)
+	require.NoError(t, st.RecordUserPresence("node-b", user.ID, false, nil))
+	views, err = st.ListUserViews("")
+	require.NoError(t, err)
+	require.True(t, views[0].Online)
+	require.Len(t, views[0].OnlineIPs, 1)
+	require.Equal(t, "203.0.113.10", views[0].OnlineIPs[0].IP)
+	stored, err = st.ListUserIPs(user.ID)
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	require.Equal(t, "203.0.113.10", stored[0].IP)
+}
+
+func TestUserPresenceDistinctIPsOnTwoNodesOfflineKeepsOther(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "node-a", Username: "distinct-ip"}
+	require.NoError(t, st.UpsertUser(user))
+	a := &models.Inbound{NodeUUID: "node-a", Name: "a", Protocol: "vless", Port: 10001, Enabled: true}
+	b := &models.Inbound{NodeUUID: "node-b", Name: "b", Protocol: "vless", Port: 10002, Enabled: true}
+	require.NoError(t, st.UpsertInbound(a))
+	require.NoError(t, st.UpsertInbound(b))
+	require.NoError(t, st.ReplaceGrants(user.ID, []string{a.ID, b.ID}))
+	require.NoError(t, st.RecordUserPresence("node-a", user.ID, true, []UserIPView{{IP: "203.0.113.10"}}))
+	require.NoError(t, st.RecordUserPresence("node-b", user.ID, true, []UserIPView{{IP: "203.0.113.11"}}))
+	views, err := st.ListUserViews("")
+	require.NoError(t, err)
+	require.True(t, views[0].Online)
+	require.Len(t, views[0].OnlineIPs, 2)
+	require.NoError(t, st.RecordUserPresence("node-b", user.ID, false, nil))
+	views, err = st.ListUserViews("")
+	require.NoError(t, err)
+	require.True(t, views[0].Online)
+	require.Len(t, views[0].OnlineIPs, 1)
+	require.Equal(t, "203.0.113.10", views[0].OnlineIPs[0].IP)
+}
+
+func TestUserPresenceSkipsLoopbackIPs(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "bob"}
+	require.NoError(t, st.UpsertUser(user))
+	require.NoError(t, st.RecordUserPresence("n1", user.ID, true, []UserIPView{
+		{IP: "127.0.0.1"},
+		{IP: "::1"},
+		{IP: "203.0.113.50"},
+	}))
+	views, err := st.ListUserViews("")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Len(t, views[0].OnlineIPs, 1)
+	require.Equal(t, "203.0.113.50", views[0].OnlineIPs[0].IP)
+}
+
+func TestUpsertInboundEmptyListenFollowsStack(t *testing.T) {
+	st := testDB(t)
+	dual := &models.Inbound{
+		NodeUUID:     "n1",
+		Name:         "dual",
+		Protocol:     "vless",
+		Port:         443,
+		Core:         models.CoreXray,
+		SettingsJSON: `{"stack":"dual"}`,
+	}
+	require.NoError(t, st.UpsertInbound(dual))
+	got, err := st.GetInbound(dual.ID)
+	require.NoError(t, err)
+	require.Equal(t, "0.0.0.0,::", got.Listen)
+
+	ipv4 := &models.Inbound{
+		NodeUUID:     "n1",
+		Name:         "v4",
+		Protocol:     "vless",
+		Port:         8443,
+		Core:         models.CoreXray,
+		SettingsJSON: `{"stack":"ipv4"}`,
+	}
+	require.NoError(t, st.UpsertInbound(ipv4))
+	got, err = st.GetInbound(ipv4.ID)
+	require.NoError(t, err)
+	require.Equal(t, "0.0.0.0", got.Listen)
+}
+
+func TestInboundCRUD(t *testing.T) {
+	st := testDB(t)
+	in := &models.Inbound{NodeUUID: "n1", Name: "in-a", Protocol: "vless", Port: 443, Core: models.CoreXray}
+	require.NoError(t, st.UpsertInbound(in))
+	list, err := st.ListInbounds("n1")
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.NoError(t, st.DeleteInbound(in.ID))
+	list, err = st.ListInbounds("n1")
+	require.NoError(t, err)
+	require.Len(t, list, 0)
+}
+
+func TestCredentialHashIndependentOfAdmin(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "alice"}
+	require.NoError(t, st.UpsertUser(user))
+	cred, secret, err := st.IssueCredential(user.ID, "password", "s3cret", nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, secret)
+	require.True(t, MatchSecret(cred.SecretHash, "s3cret"))
+	require.False(t, MatchSecret(cred.SecretHash, "wrong"))
+	_, rotated, err := st.RotateCredential(cred.ID)
+	require.NoError(t, err)
+	require.False(t, MatchSecret(cred.SecretHash, rotated))
+	require.NoError(t, st.RevokeCredential(cred.ID))
+	list, err := st.ListCredentials(user.ID)
+	require.NoError(t, err)
+	require.False(t, list[0].Enabled)
+}
+
+func TestReplaceGrantsAndUserView(t *testing.T) {
+	st := testDB(t)
+	in := &models.Inbound{NodeUUID: "n1", Name: "vless-443", Protocol: "vless", Port: 443, Core: models.CoreXray}
+	require.NoError(t, st.UpsertInbound(in))
+	user := &models.NodeUser{NodeUUID: "n1", Username: "alice"}
+	require.NoError(t, st.UpsertUser(user))
+	plan := &models.Plan{Name: "std", TrafficBytes: 1000, DurationDays: 30}
+	require.NoError(t, st.UpsertPlan(plan))
+	require.NoError(t, st.SaveAssignment(&models.Assignment{UserID: user.ID, PlanID: plan.ID, TrafficBytes: 1000}))
+	require.NoError(t, st.ReplaceGrants(user.ID, []string{in.ID, in.ID}))
+	views, err := st.ListUserViews("")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Equal(t, []string{in.ID}, views[0].InboundIDs)
+	require.Equal(t, "std", views[0].PlanName)
+	require.Equal(t, []string{"vless-443"}, views[0].InboundNames)
+}
+
+func TestAssignedPlanRateOverridesUserRate(t *testing.T) {
+	st := testDB(t)
+	in := &models.Inbound{NodeUUID: "n1", Name: "vless-443", Protocol: "vless", Port: 443, Core: models.CoreXray}
+	require.NoError(t, st.UpsertInbound(in))
+	user := &models.NodeUser{NodeUUID: "n1", Username: "alice", RateLimitBps: 999}
+	require.NoError(t, st.UpsertUser(user))
+	plan := &models.Plan{Name: "std", TrafficBytes: 1000, DurationDays: 30, RateLimitBps: 256000}
+	require.NoError(t, st.UpsertPlan(plan))
+	require.NoError(t, st.SaveAssignment(&models.Assignment{UserID: user.ID, PlanID: plan.ID, TrafficBytes: 1000, RateLimitBps: 256000}))
+	require.NoError(t, st.ReplaceGrants(user.ID, []string{in.ID}))
+	views, err := st.ListUserViews("")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Equal(t, int64(256000), views[0].RateLimitBps)
+	snap, err := st.NodeSnapshot("n1")
+	require.NoError(t, err)
+	users := snap["users"].([]snapshotUser)
+	require.Len(t, users, 1)
+	require.Equal(t, int64(256000), users[0].RateLimitBps)
+	stored, err := st.GetUser(user.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(999), stored.RateLimitBps)
+}
+
+func TestNodeSnapshotScopesGrantsAndProtocolSecrets(t *testing.T) {
+	st := testDB(t)
+	inA := &models.Inbound{NodeUUID: "n1", Name: "a", Protocol: "vless", Port: 1}
+	inB := &models.Inbound{NodeUUID: "n1", Name: "b", Protocol: "vless", Port: 2}
+	inC := &models.Inbound{NodeUUID: "n2", Name: "c", Protocol: "vless", Port: 3}
+	require.NoError(t, st.UpsertInbound(inA))
+	require.NoError(t, st.UpsertInbound(inB))
+	require.NoError(t, st.UpsertInbound(inC))
+	user := &models.NodeUser{NodeUUID: "n1", Username: "alice"}
+	require.NoError(t, st.UpsertUser(user))
+	_, secret, err := st.IssueCredential(user.ID, "uuid", "", nil)
+	require.NoError(t, err)
+	require.NoError(t, st.ReplaceGrants(user.ID, []string{inA.ID, inC.ID}))
+	snap, err := st.NodeSnapshot("n1")
+	require.NoError(t, err)
+	users := snap["users"].([]snapshotUser)
+	require.Len(t, users, 1)
+	require.Equal(t, []string{inA.ID}, users[0].InboundIDs)
+	require.Len(t, users[0].Credentials, 1)
+	require.Equal(t, secret, users[0].Credentials[0].Secret)
+	require.Equal(t, secret, users[0].Credentials[0].UUID)
+	snap2, err := st.NodeSnapshot("n2")
+	require.NoError(t, err)
+	users2 := snap2["users"].([]snapshotUser)
+	require.Len(t, users2, 1)
+	require.Equal(t, []string{inC.ID}, users2[0].InboundIDs)
+	nodes, err := st.NodeIDsForUser(user.ID)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"n1", "n2"}, nodes)
+}
+
+func TestNodeSnapshotForcesRealitySniffRouteOnly(t *testing.T) {
+	st := testDB(t)
+	in := &models.Inbound{
+		NodeUUID:     "n1",
+		Name:         "r",
+		Protocol:     "vless",
+		Port:         443,
+		SettingsJSON: `{"sniffing":true,"security":"reality","flow":"xtls-rprx-vision","dest_override":"http,tls,quic"}`,
+	}
+	require.NoError(t, st.UpsertInbound(in))
+	snap, err := st.NodeSnapshot("n1")
+	require.NoError(t, err)
+	rows := snap["inbounds"].([]models.Inbound)
+	require.Len(t, rows, 1)
+	require.Contains(t, rows[0].SettingsJSON, `"route_only":true`)
+	stored, err := st.GetInbound(in.ID)
+	require.NoError(t, err)
+	require.NotContains(t, stored.SettingsJSON, `"route_only":true`)
+}
+
+func TestSaveUserProfileKeepsQuotaUsageExpiry(t *testing.T) {
+	st := testDB(t)
+	expires := time.Date(2026, 11, 19, 0, 0, 0, 0, time.UTC)
+	user := &models.NodeUser{
+		NodeUUID:     "n1",
+		Username:     "alice",
+		DisplayName:  "Alice",
+		QuotaBytes:   1000,
+		UsedBytes:    500,
+		ExpiresAt:    &expires,
+		SharedPoolID: "pool-1",
+		Status:       models.UserDisabled,
+	}
+	require.NoError(t, st.UpsertUser(user))
+	require.NoError(t, st.SaveUserProfile(&models.NodeUser{
+		ID:           user.ID,
+		Username:     "alice2",
+		DisplayName:  "Alice Two",
+		Flow:         "xtls-rprx-vision",
+		RateLimitBps: 128000,
+		DeviceLimit:  3,
+		Status:       models.UserActive,
+		NodeUUID:     "n2",
+	}))
+	got, err := st.GetUser(user.ID)
+	require.NoError(t, err)
+	require.Equal(t, "alice2", got.Username)
+	require.Equal(t, "Alice Two", got.DisplayName)
+	require.Equal(t, "xtls-rprx-vision", got.Flow)
+	require.Equal(t, int64(128000), got.RateLimitBps)
+	require.Equal(t, 3, got.DeviceLimit)
+	require.Equal(t, models.UserActive, got.Status)
+	require.Equal(t, "n2", got.NodeUUID)
+	require.Equal(t, int64(1000), got.QuotaBytes)
+	require.Equal(t, int64(500), got.UsedBytes)
+	require.Equal(t, "pool-1", got.SharedPoolID)
+	require.NotNil(t, got.ExpiresAt)
+	require.True(t, got.ExpiresAt.Equal(expires))
+}
+
+func TestSetUserExpiryAndResetAndMonthlyClear(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "alice", QuotaBytes: 1000, UsedBytes: 500}
+	require.NoError(t, st.UpsertUser(user))
+	now := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
+	expires := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, st.SetUserExpiryAndReset(user.ID, &expires, 15, now))
+	got, err := st.GetUser(user.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.ExpiresAt)
+	require.True(t, got.ExpiresAt.Equal(expires))
+	require.Equal(t, 15, got.TrafficResetDay)
+	require.Equal(t, int64(500), got.UsedBytes)
+	require.Equal(t, "2026-10-15", got.TrafficResetCycle)
+	got.TrafficResetCycle = "2026-09-15"
+	require.NoError(t, st.DB().Save(got).Error)
+	ids, err := st.ApplyDueTrafficResets(now)
+	require.NoError(t, err)
+	require.Equal(t, []string{user.ID}, ids)
+	got, err = st.GetUser(user.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), got.UsedBytes)
+	require.Equal(t, "2026-10-15", got.TrafficResetCycle)
+	require.NoError(t, st.SetUserExpiryAndReset(user.ID, nil, 0, now))
+	got, err = st.GetUser(user.ID)
+	require.NoError(t, err)
+	require.Nil(t, got.ExpiresAt)
+	require.Equal(t, 0, got.TrafficResetDay)
+}
+
+func TestSetUserExpiryAndResetKeepsCycleAcrossBoundary(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "alice", QuotaBytes: 1000, UsedBytes: 500}
+	require.NoError(t, st.UpsertUser(user))
+	before := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	after := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, st.SetUserExpiryAndReset(user.ID, nil, 15, before))
+	got, err := st.GetUser(user.ID)
+	require.NoError(t, err)
+	require.Equal(t, "2026-09-15", got.TrafficResetCycle)
+	require.NoError(t, st.SaveUserProfile(&models.NodeUser{ID: user.ID, Username: "alice2", NodeUUID: "n1"}))
+	require.NoError(t, st.SetUserExpiryAndReset(user.ID, nil, 15, after))
+	got, err = st.GetUser(user.ID)
+	require.NoError(t, err)
+	require.Equal(t, "alice2", got.Username)
+	require.Equal(t, int64(500), got.UsedBytes)
+	require.Equal(t, "2026-09-15", got.TrafficResetCycle)
+	ok, err := st.ApplyUserTrafficReset(user.ID, after)
+	require.NoError(t, err)
+	require.True(t, ok)
+	got, err = st.GetUser(user.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), got.UsedBytes)
+	require.Equal(t, "2026-10-15", got.TrafficResetCycle)
+	ok, err = st.ApplyUserTrafficReset(user.ID, after)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestDeviceLimitZeroMeansUnlimited(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "bob", DeviceLimit: 0}
+	require.NoError(t, st.UpsertUser(user))
+	got, err := st.GetUser(user.ID)
+	require.NoError(t, err)
+	require.Equal(t, 0, got.DeviceLimit)
+	plan := &models.Plan{Name: "open", DeviceLimit: 0}
+	require.NoError(t, st.UpsertPlan(plan))
+	saved, err := st.GetPlan(plan.ID)
+	require.NoError(t, err)
+	require.Equal(t, 0, saved.DeviceLimit)
+}
+
+func TestInboundSortAndSubscriptionEnsure(t *testing.T) {
+	st := testDB(t)
+	a := &models.Inbound{NodeUUID: "n1", Name: "a", Protocol: "vless", Port: 1, SortIndex: 2}
+	b := &models.Inbound{NodeUUID: "n1", Name: "b", Protocol: "vless", Port: 2, SortIndex: 1}
+	require.NoError(t, st.UpsertInbound(a))
+	require.NoError(t, st.UpsertInbound(b))
+	list, err := st.ListInbounds("n1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"b", "a"}, []string{list[0].Name, list[1].Name})
+	require.NoError(t, st.ReorderInbounds("n1", []string{a.ID, b.ID}))
+	list, err = st.ListInbounds("n1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, []string{list[0].Name, list[1].Name})
+	user := &models.NodeUser{NodeUUID: "n1", Username: "carol"}
+	require.NoError(t, st.UpsertUser(user))
+	first, err := st.EnsureSubscription(user.ID)
+	require.NoError(t, err)
+	again, err := st.EnsureSubscription(user.ID)
+	require.NoError(t, err)
+	require.Equal(t, first.ID, again.ID)
+	require.NotEmpty(t, first.Token)
+	require.Equal(t, "xray", first.Format)
+}
+
+func TestReorderInboundsAcrossNodes(t *testing.T) {
+	st := testDB(t)
+	a := &models.Inbound{NodeUUID: "n1", Name: "a", Protocol: "vless", Port: 1, SortIndex: 1}
+	b := &models.Inbound{NodeUUID: "n2", Name: "b", Protocol: "vless", Port: 2, SortIndex: 2}
+	require.NoError(t, st.UpsertInbound(a))
+	require.NoError(t, st.UpsertInbound(b))
+	require.NoError(t, st.ReorderInbounds("", []string{b.ID, a.ID}))
+	list, err := st.ListInbounds("")
+	require.NoError(t, err)
+	require.Equal(t, []string{"b", "a"}, []string{list[0].Name, list[1].Name})
+	require.Equal(t, 1, list[0].SortIndex)
+	require.Equal(t, 2, list[1].SortIndex)
+}
+
+func TestUpsertOutboundRejectsDuplicateTagOnSameNode(t *testing.T) {
+	st := testDB(t)
+	first := &models.Outbound{NodeUUID: "n1", Name: "exit-a", Protocol: "vless", Enabled: true}
+	require.NoError(t, st.UpsertOutbound(first))
+	dup := &models.Outbound{NodeUUID: "n1", Name: "exit-a", Protocol: "vless", Enabled: true}
+	require.ErrorIs(t, st.UpsertOutbound(dup), ErrConflict)
+	otherNode := &models.Outbound{NodeUUID: "n2", Name: "exit-a", Protocol: "vless", Enabled: true}
+	require.NoError(t, st.UpsertOutbound(otherNode))
+	first.Protocol = "socks"
+	require.NoError(t, st.UpsertOutbound(first))
+	require.ErrorIs(t, st.UpsertOutbound(&models.Outbound{NodeUUID: "n1", Name: "direct", Protocol: "freedom"}), ErrInvalid)
+	require.ErrorIs(t, st.UpsertOutbound(&models.Outbound{NodeUUID: "n1", Name: "block", Protocol: "blackhole"}), ErrInvalid)
+}
+
+func TestDeleteOutboundRemovesReferencingRoutes(t *testing.T) {
+	st := testDB(t)
+	out := &models.Outbound{NodeUUID: "n1", Name: "exit-a", Protocol: "freedom", Enabled: true}
+	require.NoError(t, st.UpsertOutbound(out))
+	keep := &models.Outbound{NodeUUID: "n1", Name: "exit-b", Protocol: "freedom", Enabled: true}
+	require.NoError(t, st.UpsertOutbound(keep))
+	hit := &models.Route{NodeUUID: "n1", Name: "route-1", Enabled: true, RuleJSON: `{"inbound_id":"in1","outbound_id":"` + out.ID + `"}`}
+	other := &models.Route{NodeUUID: "n1", Name: "route-2", Enabled: true, RuleJSON: `{"inbound_id":"in1","outbound_id":"` + keep.ID + `"}`}
+	builtin := &models.Route{NodeUUID: "n1", Name: "route-direct", Enabled: true, RuleJSON: `{"inbound_id":"in1","outbound_id":"direct"}`}
+	require.NoError(t, st.UpsertRoute(hit))
+	require.NoError(t, st.UpsertRoute(other))
+	require.NoError(t, st.UpsertRoute(builtin))
+	require.NoError(t, st.DeleteOutbound(out.ID))
+	_, err := st.GetOutbound(out.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+	_, err = st.GetRoute(hit.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+	got, err := st.GetRoute(other.ID)
+	require.NoError(t, err)
+	require.Equal(t, "route-2", got.Name)
+	got, err = st.GetRoute(builtin.ID)
+	require.NoError(t, err)
+	require.Equal(t, "route-direct", got.Name)
+}
+
+func TestControlCommandIdempotent(t *testing.T) {
+	st := testDB(t)
+	cmd := &models.ControlCommand{OperationID: "op-1", NodeUUID: "n1", Kind: "applyConfig", PayloadJSON: "{}"}
+	require.NoError(t, st.EnqueueCommand(cmd))
+	require.NoError(t, st.EnqueueCommand(cmd))
+	pending, err := st.PendingCommands("n1")
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.NoError(t, st.AckCommand("op-1", models.CmdApplied, ""))
+	pending, err = st.PendingCommands("n1")
+	require.NoError(t, err)
+	require.Len(t, pending, 0)
+}
+
+func TestMarkCommandSentAndLatest(t *testing.T) {
+	st := testDB(t)
+	first := &models.ControlCommand{OperationID: "op-a", NodeUUID: "n1", Kind: "applyConfig", PayloadJSON: "{}"}
+	require.NoError(t, st.EnqueueCommand(first))
+	require.NoError(t, st.MarkCommandSent("op-a"))
+	pending, err := st.PendingCommands("n1")
+	require.NoError(t, err)
+	require.Len(t, pending, 0)
+	second := &models.ControlCommand{OperationID: "op-b", NodeUUID: "n1", Kind: "applyConfig", PayloadJSON: `{"rev":2}`}
+	require.NoError(t, st.EnqueueCommand(second))
+	latest, err := st.LatestCommands()
+	require.NoError(t, err)
+	require.Len(t, latest, 1)
+	require.Equal(t, "op-b", latest[0].OperationID)
+	require.NoError(t, st.AckCommand("op-a", models.CmdApplied, ""))
+	latest, err = st.LatestCommands()
+	require.NoError(t, err)
+	require.Len(t, latest, 1)
+	require.Equal(t, "op-b", latest[0].OperationID)
+}
+
+func TestUpsertFileCertKeepsEmptyIssuer(t *testing.T) {
+	st := testDB(t)
+	row := &models.Certificate{
+		NodeUUID: "n1",
+		Domain:   "panel.example",
+		Source:   models.CertSourceFile,
+		CertPath: "/opt/1panel/ssl/fullchain.pem",
+		KeyPath:  "/opt/1panel/ssl/privkey.pem",
+	}
+	require.NoError(t, st.UpsertCert(row))
+	got, err := st.GetCert(row.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CertSourceFile, got.Source)
+	require.Equal(t, "/opt/1panel/ssl/fullchain.pem", got.CertPath)
+	require.Equal(t, "/opt/1panel/ssl/privkey.pem", got.KeyPath)
+	require.Empty(t, got.Issuer)
+}
+
+func TestUserExtraLinksReplaceListAndDelete(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "alice"}
+	require.NoError(t, st.UpsertUser(user))
+	require.NoError(t, st.ReplaceUserExtraLinks(user.ID, []models.UserExtraLink{
+		{Kind: models.ExtraLinkKindLink, Value: "vless://u@host:443", Remark: "share", Enabled: true},
+		{Kind: models.ExtraLinkKindSubscription, Value: "https://provider.example/sub", NamePrefix: "ext-", Enabled: true},
+	}))
+	views, err := st.ListUserViews("")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Len(t, views[0].ExtraLinks, 2)
+	require.Equal(t, models.ExtraLinkKindLink, views[0].ExtraLinks[0].Kind)
+	require.Equal(t, "ext-", views[0].ExtraLinks[1].NamePrefix)
+	require.NoError(t, st.ReplaceUserExtraLinks(user.ID, []models.UserExtraLink{
+		{Kind: models.ExtraLinkKindLink, Value: "ss://abc@host:8388", Enabled: true},
+	}))
+	rows, err := st.ListUserExtraLinks(user.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "ss://abc@host:8388", rows[0].Value)
+	require.NoError(t, st.DeleteUser(user.ID))
+	_, err = st.ListUserExtraLinks(user.ID)
+	require.NoError(t, err)
+	left, err := st.ListUserViews("")
+	require.NoError(t, err)
+	require.Empty(t, left)
+}
+
+func TestUserExtraLinksPersistDisabled(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "bob"}
+	require.NoError(t, st.UpsertUser(user))
+	require.NoError(t, st.ReplaceUserExtraLinks(user.ID, []models.UserExtraLink{
+		{Kind: models.ExtraLinkKindLink, Value: "vless://off@host:443", Enabled: false},
+		{Kind: models.ExtraLinkKindSubscription, Value: "https://provider.example/sub", Enabled: false},
+	}))
+	rows, err := st.ListUserExtraLinks(user.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.False(t, rows[0].Enabled)
+	require.False(t, rows[1].Enabled)
+	id := rows[0].ID
+	require.NoError(t, st.ReplaceUserExtraLinks(user.ID, []models.UserExtraLink{
+		{ID: id, Kind: models.ExtraLinkKindLink, Value: "vless://off@host:443", Enabled: true},
+	}))
+	rows, err = st.ListUserExtraLinks(user.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.True(t, rows[0].Enabled)
+	require.Equal(t, id, rows[0].ID)
+	require.NoError(t, st.ReplaceUserExtraLinks(user.ID, []models.UserExtraLink{
+		{ID: id, Kind: models.ExtraLinkKindLink, Value: "vless://off@host:443", Enabled: false},
+	}))
+	rows, err = st.ListUserExtraLinks(user.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.False(t, rows[0].Enabled)
+	require.Equal(t, id, rows[0].ID)
+}

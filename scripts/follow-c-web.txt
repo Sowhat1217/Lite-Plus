@@ -1,0 +1,7 @@
+src/routes.ts
+src/config/menuConfig.json
+src/lib/rpc2.ts
+src/i18n/locales/en.json
+src/i18n/locales/ja_JP.json
+src/i18n/locales/zh_CN.json
+src/i18n/locales/zh_TW.json

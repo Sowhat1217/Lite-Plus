@@ -139,7 +139,7 @@ func TestChunkedBackupUploadStagesOnlyValidatedArchive(t *testing.T) {
 	archive := themeArchive(t, map[string]string{
 		"lite.db":              "sqlite-data",
 		"metrics.db":           "metrics-data",
-		"komari-backup-markup": "full",
+		"lite-backup-markup": "full",
 	})
 	response := uploadArchiveThroughHandler(t, router, upload.PurposeBackup, "backup.zip", archive)
 	if response.Code != http.StatusOK {
@@ -167,7 +167,7 @@ func TestChunkedBackupUploadFailurePreservesExistingStagedBackup(t *testing.T) {
 		"not zip":        []byte("not a zip"),
 		"missing marker": themeArchive(t, map[string]string{"lite.db": "sqlite-data"}),
 		"missing database": themeArchive(t, map[string]string{
-			"komari-backup-markup": "config",
+			"lite-backup-markup": "config",
 		}),
 	} {
 		t.Run(name, func(t *testing.T) {

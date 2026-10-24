@@ -218,7 +218,7 @@ func TestNormalizeUsesDefaultHTTPSPortAndRequiresCertificatePaths(t *testing.T) 
 	if err != nil {
 		t.Fatalf("normalize default HTTPS settings: %v", err)
 	}
-	if settings.Listen != ":36888" {
+	if settings.Listen != ":37888" {
 		t.Fatalf("default listen = %q", settings.Listen)
 	}
 	settings.Enabled = true
@@ -235,7 +235,7 @@ func TestLoadSettingsKeepsLegacyHTTPSListenPort(t *testing.T) {
 	appconfig.SetDb(db)
 	if err := appconfig.SetMany(map[string]any{
 		appconfig.HTTPSEnabledKey:      false,
-		appconfig.HTTPSListenKey:       ":35938",
+		appconfig.HTTPSListenKey:       ":9443",
 		appconfig.HTTPSRedirectHTTPKey: false,
 	}); err != nil {
 		t.Fatalf("seed legacy HTTPS listen: %v", err)
@@ -245,15 +245,15 @@ func TestLoadSettingsKeepsLegacyHTTPSListenPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load HTTPS settings: %v", err)
 	}
-	if settings.Listen != ":35938" {
-		t.Fatalf("listen = %q, want to keep :35938", settings.Listen)
+	if settings.Listen != ":9443" {
+		t.Fatalf("listen = %q, want to keep the stored custom port", settings.Listen)
 	}
 	persisted, err := appconfig.GetAs[string](appconfig.HTTPSListenKey)
 	if err != nil {
 		t.Fatalf("read HTTPS listen: %v", err)
 	}
-	if persisted != ":35938" {
-		t.Fatalf("persisted listen = %q, want :35938", persisted)
+	if persisted != ":9443" {
+		t.Fatalf("persisted listen = %q, want stored custom port", persisted)
 	}
 }
 

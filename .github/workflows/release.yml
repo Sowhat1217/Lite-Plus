@@ -12,14 +12,14 @@ on:
         required: true
         type: string
       web_ref:
-        description: Branch or tag in the sibling Lite-web repository
+        description: Branch or tag in the sibling Lite-Plus-web repository
         required: true
         default: main
         type: string
       theme_ref:
-        description: Lite-theme branch or tag. Leave empty to use main.
+        description: Lite-theme branch or tag. Leave empty to use the pin in plus-baseline.json (v1.2.9).
         required: false
-        default: main
+        default: ""
         type: string
 
 permissions:
@@ -40,6 +40,11 @@ jobs:
       web_ref: ${{ steps.validate.outputs.web_ref }}
       theme_ref: ${{ steps.validate.outputs.theme_ref }}
     steps:
+      - name: Checkout for theme pin
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Validate release metadata
         id: validate
         env:
@@ -52,8 +57,8 @@ jobs:
           set -euo pipefail
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid version: $VERSION" >&2; exit 1; }
           [[ "$VERSION_HASH" =~ ^[A-Za-z0-9]{7}$ ]] || { echo "Invalid version identifier: $VERSION_HASH" >&2; exit 1; }
-          [ -n "$WEB_REF" ] || { echo "Lite-web ref cannot be empty." >&2; exit 1; }
-          THEME_REF="${THEME_REF:-main}"
+          [ -n "$WEB_REF" ] || { echo "Lite-Plus-web ref cannot be empty." >&2; exit 1; }
+          THEME_REF="$(python3 scripts/plus_follow.py theme-ref "${THEME_REF:-}")"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "version_hash=$VERSION_HASH" >> "$GITHUB_OUTPUT"
           echo "web_ref=$WEB_REF" >> "$GITHUB_OUTPUT"
@@ -123,14 +128,14 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26.8"
+          go-version: "1.26.10"
           check-latest: false
 
-      - name: Confirm Go 1.26.8
+      - name: Confirm Go 1.26.10
         run: |
           set -euo pipefail
           go version
-          test "$(go env GOVERSION)" = "go1.26.8"
+          test "$(go env GOVERSION)" = "go1.26.10"
           echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
 
       - name: Install Zig cross-compiler toolchain

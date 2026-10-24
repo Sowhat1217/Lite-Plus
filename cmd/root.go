@@ -20,9 +20,9 @@ func GetEnvFirst(defaultValue string, keys ...string) string {
 }
 
 var RootCmd = &cobra.Command{
-	Use:   "Lite",
-	Short: "轻量.Lite is a simple server monitoring tool",
-	Long: `轻量.Lite is a simple server monitoring tool. 
+	Use:   "Lite-Plus",
+	Short: "Lite-Plus is a simple server monitoring tool",
+	Long: `Lite-Plus is a simple server monitoring tool. 
 Made by Nomi with love.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.SetArgs([]string{"server"})
