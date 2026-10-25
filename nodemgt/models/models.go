@@ -22,6 +22,7 @@ const (
 
 	CertSourceACME = "acme"
 	CertSourceFile = "file"
+	CertSourceRoot = "root"
 )
 
 type Inbound struct {
@@ -236,21 +237,40 @@ type UserExtraLink struct {
 
 func (UserExtraLink) TableName() string { return "nodemgt_user_extra_links" }
 
-type Certificate struct {
+type RootCertificate struct {
 	ID          string     `json:"id" gorm:"type:varchar(36);primaryKey"`
-	NodeUUID    string     `json:"node_uuid" gorm:"type:varchar(36);index;not null"`
-	Domain      string     `json:"domain" gorm:"type:varchar(253);not null"`
-	Source      string     `json:"source" gorm:"type:varchar(16);not null;default:'acme'"`
-	Issuer      string     `json:"issuer" gorm:"type:varchar(64);not null;default:''"`
+	Domain      string     `json:"domain" gorm:"type:varchar(253);uniqueIndex;not null"`
+	KeyPEM      string     `json:"-" gorm:"type:longtext"`
+	ChainPEM    string     `json:"-" gorm:"type:longtext"`
 	Fingerprint string     `json:"fingerprint" gorm:"type:varchar(128)"`
+	Issuer      string     `json:"issuer" gorm:"type:varchar(64);not null;default:''"`
 	NotAfter    *time.Time `json:"not_after"`
-	CertPath    string     `json:"cert_path" gorm:"type:varchar(512)"`
-	KeyPath     string     `json:"key_path" gorm:"type:varchar(512)"`
-	ChainPEM    string     `json:"chain_pem,omitempty" gorm:"type:longtext"`
 	Status      string     `json:"status" gorm:"type:varchar(16);not null;default:'pending'"`
 	LastError   string     `json:"last_error" gorm:"type:varchar(512)"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+func (RootCertificate) TableName() string { return "nodemgt_root_certs" }
+
+type Certificate struct {
+	ID             string     `json:"id" gorm:"type:varchar(36);primaryKey"`
+	NodeUUID       string     `json:"node_uuid" gorm:"type:varchar(36);index;not null"`
+	Domain         string     `json:"domain" gorm:"type:varchar(253);not null"`
+	RootCertID     string     `json:"root_cert_id" gorm:"type:varchar(36);index"`
+	ShareDomain    string     `json:"share_domain" gorm:"type:varchar(253);not null;default:''"`
+	CoverWildcard  bool       `json:"cover_wildcard" gorm:"not null;default:false"`
+	Source         string     `json:"source" gorm:"type:varchar(16);not null;default:'acme'"`
+	Issuer         string     `json:"issuer" gorm:"type:varchar(64);not null;default:''"`
+	Fingerprint    string     `json:"fingerprint" gorm:"type:varchar(128)"`
+	NotAfter       *time.Time `json:"not_after"`
+	CertPath       string     `json:"cert_path" gorm:"type:varchar(512)"`
+	KeyPath        string     `json:"key_path" gorm:"type:varchar(512)"`
+	ChainPEM       string     `json:"chain_pem,omitempty" gorm:"type:longtext"`
+	Status         string     `json:"status" gorm:"type:varchar(16);not null;default:'pending'"`
+	LastError      string     `json:"last_error" gorm:"type:varchar(512)"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 func (Certificate) TableName() string { return "nodemgt_certs" }
@@ -317,6 +337,7 @@ func All() []any {
 		&SubscriptionTemplate{},
 		&SubscriptionTemplateBinding{},
 		&UserExtraLink{},
+		&RootCertificate{},
 		&Certificate{},
 		&ControlCommand{},
 		&AuditEvent{},

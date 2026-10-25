@@ -79,6 +79,49 @@ func TestDefaultCoreAnyTLS(t *testing.T) {
 	}
 }
 
+func TestDefaultSSMethodIs2022(t *testing.T) {
+	if got := DefaultSSMethod(); got != "2022-blake3-aes-128-gcm" {
+		t.Fatalf("default ss method %s", got)
+	}
+}
+
+func TestShadowsocksForcesTCPAndDropsHTTPHeader(t *testing.T) {
+	raw := StreamJSON(Settings{Transport: "ws", Security: "reality", TCPHeader: "http", TCPHost: "example.com"}, "shadowsocks")
+	var stream map[string]any
+	if err := json.Unmarshal([]byte(raw), &stream); err != nil {
+		t.Fatal(err)
+	}
+	if stream["network"] != "tcp" {
+		t.Fatalf("network %v in %s", stream["network"], raw)
+	}
+	if stream["security"] == "reality" {
+		t.Fatalf("reality leaked: %s", raw)
+	}
+	if _, ok := stream["tcpSettings"]; ok {
+		t.Fatalf("tcp camouflage leaked: %s", raw)
+	}
+}
+
+func TestHTTPForcesTCPAndRejectsReality(t *testing.T) {
+	if got := DefaultCore("http"); got != "xray" {
+		t.Fatalf("http core %s", got)
+	}
+	if got := DefaultTransport("http"); got != "tcp" {
+		t.Fatalf("http transport %s", got)
+	}
+	raw := StreamJSON(Settings{Transport: "ws", Security: "reality"}, "http")
+	var stream map[string]any
+	if err := json.Unmarshal([]byte(raw), &stream); err != nil {
+		t.Fatal(err)
+	}
+	if stream["network"] != "tcp" {
+		t.Fatalf("network %v in %s", stream["network"], raw)
+	}
+	if stream["security"] == "reality" {
+		t.Fatalf("reality leaked: %s", raw)
+	}
+}
+
 func TestNormalizeShareStrategy(t *testing.T) {
 	cases := map[string]string{
 		"":            "node",

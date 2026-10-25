@@ -55,6 +55,9 @@ func init() {
 	reg("nodemgt.cert.request", nodemgtCertRequest, "Request a certificate")
 	reg("nodemgt.cert.renew", nodemgtCertRequest, "Renew a certificate")
 	reg("nodemgt.cert.delete", nodemgtCertDelete, "Delete a certificate")
+	reg("nodemgt.root_cert.list", nodemgtRootCertList, "List root certificates")
+	reg("nodemgt.root_cert.issue", nodemgtRootCertIssue, "Issue a root domain certificate")
+	reg("nodemgt.root_cert.delete", nodemgtRootCertDelete, "Delete a root certificate")
 	reg("nodemgt.subscription.list", nodemgtSubList, "List subscriptions")
 	reg("nodemgt.subscription.upsert", nodemgtSubUpsert, "Create or update a subscription")
 	reg("nodemgt.subscription.delete", nodemgtSubDelete, "Delete a subscription")
@@ -215,6 +218,7 @@ type inboundUpsertParams struct {
 	Transport          string `json:"transport"`
 	Security           string `json:"security"`
 	SNI                string `json:"sni"`
+	TLSDomain          string `json:"tls_domain"`
 	ALPN               string `json:"alpn"`
 	CertID             string `json:"cert_id"`
 	RealityDest        string `json:"reality_dest"`
@@ -284,6 +288,16 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 			p.Security = inboundcfg.DefaultSecurity(p.Protocol)
 		}
 	}
+	if strings.EqualFold(p.Protocol, "http") || strings.EqualFold(p.Protocol, "shadowsocks") {
+		p.Transport = inboundcfg.DefaultTransport(p.Protocol)
+		if strings.EqualFold(p.Security, "reality") || strings.TrimSpace(p.Security) == "" {
+			p.Security = "none"
+		}
+		p.TCPHeader = ""
+	}
+	if strings.EqualFold(p.Protocol, "shadowsocks") && strings.TrimSpace(p.SSMethod) == "" {
+		p.SSMethod = inboundcfg.DefaultSSMethod()
+	}
 	if p.Port <= 0 {
 		p.Port = 443
 	}
@@ -296,9 +310,11 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 	if p.Security == "tls" && strings.TrimSpace(p.CertID) == "" {
 		return nil, rpc.MakeError(rpc.InvalidParams, "certificate required", nil)
 	}
+	ssPassword := ""
 	if p.ID != "" {
 		if existing, err := nodemgtST().GetInbound(p.ID); err == nil && existing != nil {
 			old := inboundcfg.Parse(existing.SettingsJSON)
+			ssPassword = old.SSPassword
 			if strings.TrimSpace(p.RealityPrivateKey) == "" {
 				p.RealityPrivateKey = old.RealityPrivateKey
 			}
@@ -321,9 +337,14 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 			p.RealityShortID = hex.EncodeToString(buf)
 		}
 	}
-	if strings.TrimSpace(p.CertID) != "" && p.Security == "tls" && p.SNI == "" {
+	if strings.TrimSpace(p.CertID) != "" && p.Security == "tls" {
 		if issued, err := nodemgtST().GetCert(p.CertID); err == nil && issued != nil {
-			p.SNI = issued.Domain
+			if strings.TrimSpace(p.TLSDomain) == "" {
+				p.TLSDomain = strings.TrimSpace(issued.ShareDomain)
+			}
+			if strings.TrimSpace(p.SNI) == "" {
+				p.SNI = cert.UsableShareHost(issued.Domain, firstNonEmpty(p.TLSDomain, issued.ShareDomain))
+			}
 		}
 	}
 	sniffing := false
@@ -375,6 +396,7 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 		Transport:          p.Transport,
 		Security:           p.Security,
 		SNI:                p.SNI,
+		TLSDomain:          strings.TrimSpace(p.TLSDomain),
 		ALPN:               p.ALPN,
 		CertID:             p.CertID,
 		RealityDest:        p.RealityDest,
@@ -392,6 +414,7 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 		TCPHeader:          p.TCPHeader,
 		TCPHost:            p.TCPHost,
 		SSMethod:           p.SSMethod,
+		SSPassword:         ssPassword,
 		Fingerprint:        p.Fingerprint,
 		SpiderX:            p.SpiderX,
 		Sniffing:           sniffing,
@@ -402,6 +425,13 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 	}
 	if inboundcfg.EffectiveRouteOnly(cfg) {
 		cfg.RouteOnly = true
+	}
+	if strings.EqualFold(p.Protocol, "shadowsocks") && inboundcfg.IsSS2022(cfg.SSMethod) && strings.TrimSpace(cfg.SSPassword) == "" {
+		key, err := inboundcfg.GenerateSS2022Key(cfg.SSMethod)
+		if err != nil {
+			return nil, nodemgtErr(err)
+		}
+		cfg.SSPassword = key
 	}
 	enabled := true
 	if p.Enabled != nil {
@@ -450,6 +480,7 @@ func inboundView(row models.Inbound) map[string]any {
 		"transport":            s.Transport,
 		"security":             s.Security,
 		"sni":                  s.SNI,
+		"tls_domain":           s.TLSDomain,
 		"alpn":                 s.ALPN,
 		"cert_id":              s.CertID,
 		"reality_dest":         s.RealityDest,
@@ -1151,37 +1182,197 @@ func nodemgtCertList(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.Json
 	return rows, nil
 }
 
-func nodemgtCertRequest(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+func nodemgtRootCertList(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	rows, err := nodemgtST().ListRootCerts()
+	if err != nil {
+		return nil, nodemgtErr(err)
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, rootCertView(row))
+	}
+	return out, nil
+}
+
+func nodemgtRootCertIssue(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
 	var p struct {
-		ID       string `json:"id"`
-		NodeUUID string `json:"node_uuid"`
-		Domain   string `json:"domain"`
-		CSRPEM   string `json:"csr_pem"`
-		TestCA   bool   `json:"test_ca"`
-		Source   string `json:"source"`
-		CertPath string `json:"cert_path"`
-		KeyPath  string `json:"key_path"`
+		ID     string `json:"id"`
+		Domain string `json:"domain"`
+		TestCA bool   `json:"test_ca"`
+		Sync   bool   `json:"sync"`
 	}
 	_ = req.BindParams(&p)
-	if strings.TrimSpace(p.Domain) == "" || strings.TrimSpace(p.NodeUUID) == "" {
+	domain := cert.RootDomain(p.Domain)
+	if domain == "" {
+		return nil, rpc.MakeError(rpc.InvalidParams, "domain required", nil)
+	}
+	st := nodemgtST()
+	if !p.TestCA {
+		token, _ := st.GetSetting("cf_api_token")
+		email, _ := st.GetSetting("acme_email")
+		if strings.TrimSpace(token) == "" {
+			return nil, rpc.MakeError(rpc.InvalidParams, "cloudflare api token missing", nil)
+		}
+		if strings.TrimSpace(email) == "" {
+			return nil, rpc.MakeError(rpc.InvalidParams, "acme email required", nil)
+		}
+	}
+	row := models.RootCertificate{
+		ID:     p.ID,
+		Domain: domain,
+		Status: models.CertPending,
+	}
+	if p.ID != "" {
+		if existing, err := st.GetRootCert(p.ID); err == nil && existing != nil {
+			row = *existing
+			row.Domain = domain
+			row.Status = models.CertPending
+			row.LastError = ""
+		}
+	} else if existing, err := st.GetRootCertByDomain(domain); err == nil && existing != nil {
+		row = *existing
+		row.Status = models.CertPending
+		row.LastError = ""
+	}
+	if err := st.UpsertRootCert(&row); err != nil {
+		return nil, nodemgtErr(err)
+	}
+	_ = st.Audit(nodemgtActor(ctx), "nodemgt.root_cert.issue", row.ID, domain)
+	if p.Sync || p.TestCA {
+		if err := control.IssueRootCert(ctx, st, &row, p.TestCA); err != nil {
+			return rootCertView(row), nodemgtErr(err)
+		}
+		latest, err := st.GetRootCert(row.ID)
+		if err != nil {
+			return rootCertView(row), nil
+		}
+		return rootCertView(*latest), nil
+	}
+	go issueRootCertAsync(row.ID, p.TestCA)
+	return rootCertView(row), nil
+}
+
+func issueRootCertAsync(id string, testCA bool) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			logger.Errorf("nodemgt", "root cert issue: %v", rec)
+		}
+	}()
+	st := store.New(dbcore.GetDBInstance())
+	row, err := st.GetRootCert(id)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	if err := control.IssueRootCert(ctx, st, row, testCA); err != nil {
+		logger.Warnf("nodemgt", "root cert issue %s: %v", id, err)
+	}
+}
+
+func nodemgtRootCertDelete(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var p struct {
+		ID string `json:"id"`
+	}
+	_ = req.BindParams(&p)
+	if strings.TrimSpace(p.ID) == "" {
+		return nil, rpc.MakeError(rpc.InvalidParams, "id required", nil)
+	}
+	st := nodemgtST()
+	row, err := st.GetRootCert(p.ID)
+	if err != nil {
+		return nil, nodemgtErr(err)
+	}
+	if err := st.DeleteRootCert(p.ID); err != nil {
+		return nil, nodemgtErr(err)
+	}
+	_ = st.Audit(nodemgtActor(ctx), "nodemgt.root_cert.delete", p.ID, row.Domain)
+	return map[string]any{"ok": true}, nil
+}
+
+func rootCertView(row models.RootCertificate) map[string]any {
+	return map[string]any{
+		"id":          row.ID,
+		"domain":      row.Domain,
+		"fingerprint": row.Fingerprint,
+		"issuer":      row.Issuer,
+		"not_after":   row.NotAfter,
+		"status":      row.Status,
+		"last_error":  row.LastError,
+		"created_at":  row.CreatedAt,
+		"updated_at":  row.UpdatedAt,
+	}
+}
+
+func nodemgtCertRequest(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var p struct {
+		ID            string `json:"id"`
+		NodeUUID      string `json:"node_uuid"`
+		Domain        string `json:"domain"`
+		RootCertID    string `json:"root_cert_id"`
+		ShareDomain   string `json:"share_domain"`
+		CoverWildcard *bool  `json:"cover_wildcard"`
+		CSRPEM        string `json:"csr_pem"`
+		TestCA        bool   `json:"test_ca"`
+		Source        string `json:"source"`
+		CertPath      string `json:"cert_path"`
+		KeyPath       string `json:"key_path"`
+	}
+	_ = req.BindParams(&p)
+	if strings.TrimSpace(p.NodeUUID) == "" {
 		return nil, rpc.MakeError(rpc.InvalidParams, "domain and node required", nil)
 	}
 	st := nodemgtST()
 	source := strings.ToLower(strings.TrimSpace(p.Source))
+	if source == "" && strings.TrimSpace(p.RootCertID) != "" {
+		source = models.CertSourceRoot
+	}
 	if source == "" && (strings.TrimSpace(p.CertPath) != "" || strings.TrimSpace(p.KeyPath) != "") {
 		source = models.CertSourceFile
 	}
+	if source == models.CertSourceRoot {
+		root, err := st.GetRootCert(p.RootCertID)
+		if err != nil {
+			return nil, nodemgtErr(err)
+		}
+		row := models.Certificate{ID: p.ID, NodeUUID: p.NodeUUID}
+		if p.ID != "" {
+			if existing, err := st.GetCert(p.ID); err == nil && existing != nil {
+				row = *existing
+				row.NodeUUID = p.NodeUUID
+			}
+		}
+		if err := control.DeployRootToNode(st, root, &row, p.ShareDomain); err != nil {
+			return nil, nodemgtErr(err)
+		}
+		_ = st.Audit(nodemgtActor(ctx), "nodemgt.cert.deploy_root", row.ID, row.ShareDomain)
+		nodemgtPush(st, row.NodeUUID)
+		return row, nil
+	}
+	if strings.TrimSpace(p.Domain) == "" {
+		return nil, rpc.MakeError(rpc.InvalidParams, "domain and node required", nil)
+	}
+	cover := cert.DefaultCoverWildcard(p.Domain)
+	if p.CoverWildcard != nil {
+		cover = *p.CoverWildcard
+	}
 	row := models.Certificate{
-		ID:       p.ID,
-		NodeUUID: p.NodeUUID,
-		Domain:   p.Domain,
-		Status:   models.CertPending,
+		ID:            p.ID,
+		NodeUUID:      p.NodeUUID,
+		Domain:        cert.NormalizeDomain(p.Domain),
+		ShareDomain:   cert.NormalizeDomain(p.ShareDomain),
+		CoverWildcard: cover && source != models.CertSourceFile,
+		Status:        models.CertPending,
 	}
 	if p.ID != "" {
 		if existing, err := st.GetCert(p.ID); err == nil && existing != nil {
 			row = *existing
-			row.Domain = p.Domain
+			row.Domain = cert.NormalizeDomain(p.Domain)
 			row.NodeUUID = p.NodeUUID
+			row.ShareDomain = cert.NormalizeDomain(p.ShareDomain)
+			if source != models.CertSourceFile {
+				row.CoverWildcard = cover
+			}
 			if row.Status != models.CertIssued {
 				row.Status = models.CertPending
 			}
@@ -1204,10 +1395,13 @@ func nodemgtCertRequest(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc
 		return nil, nodemgtErr(err)
 	}
 	if strings.TrimSpace(p.CSRPEM) == "" {
+		names := cert.IssueNames(row.Domain, row.CoverWildcard)
 		payload, err := json.Marshal(map[string]any{
-			"domain":  p.Domain,
-			"cert_id": row.ID,
-			"test_ca": p.TestCA,
+			"domain":         row.Domain,
+			"cert_id":        row.ID,
+			"test_ca":        p.TestCA,
+			"cover_wildcard": row.CoverWildcard,
+			"dns_names":      names,
 		})
 		if err != nil {
 			return nil, nodemgtErr(err)
@@ -1233,10 +1427,12 @@ func nodemgtCertRequest(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc
 		token, _ := st.GetSetting("cf_api_token")
 		email, _ := st.GetSetting("acme_email")
 		issued, err = cert.IssueACME(ctx, cert.Request{
-			Domain: p.Domain,
-			Email:  email,
-			CSRPEM: p.CSRPEM,
-			CF:     cert.Cloudflare{APIToken: token},
+			Domain:        row.Domain,
+			Names:         cert.IssueNames(row.Domain, row.CoverWildcard),
+			CoverWildcard: row.CoverWildcard,
+			Email:         email,
+			CSRPEM:        p.CSRPEM,
+			CF:            cert.Cloudflare{APIToken: token},
 		})
 	}
 	if err != nil {

@@ -16,6 +16,7 @@ type Settings struct {
 	Transport          string `json:"transport,omitempty"`
 	Security           string `json:"security,omitempty"`
 	SNI                string `json:"sni,omitempty"`
+	TLSDomain          string `json:"tls_domain,omitempty"`
 	ALPN               string `json:"alpn,omitempty"`
 	CertID             string `json:"cert_id,omitempty"`
 	RealityDest        string `json:"reality_dest,omitempty"`
@@ -33,6 +34,7 @@ type Settings struct {
 	TCPHeader          string `json:"tcp_header,omitempty"`
 	TCPHost            string `json:"tcp_host,omitempty"`
 	SSMethod           string `json:"ss_method,omitempty"`
+	SSPassword         string `json:"ss_password,omitempty"`
 	Fingerprint        string `json:"fingerprint,omitempty"`
 	SpiderX            string `json:"spider_x,omitempty"`
 	Sniffing           bool   `json:"sniffing,omitempty"`
@@ -204,6 +206,12 @@ func StreamJSON(s Settings, protocol string) string {
 	if security == "" {
 		security = DefaultSecurity(protocol)
 	}
+	if strings.EqualFold(protocol, "http") || strings.EqualFold(protocol, "shadowsocks") {
+		transport = "tcp"
+		if strings.EqualFold(security, "reality") {
+			security = "none"
+		}
+	}
 	stream := map[string]any{
 		"network":  transport,
 		"security": security,
@@ -213,6 +221,8 @@ func StreamJSON(s Settings, protocol string) string {
 		tls := map[string]any{}
 		if s.SNI != "" {
 			tls["serverName"] = s.SNI
+		} else if s.TLSDomain != "" {
+			tls["serverName"] = s.TLSDomain
 		}
 		if s.ALPN != "" {
 			tls["alpn"] = splitCSV(s.ALPN)
@@ -307,7 +317,7 @@ func StreamJSON(s Settings, protocol string) string {
 		}
 		stream["httpupgradeSettings"] = up
 	case "tcp":
-		if s.TCPHeader == "http" {
+		if s.TCPHeader == "http" && !strings.EqualFold(protocol, "shadowsocks") && !strings.EqualFold(protocol, "http") {
 			host := s.TCPHost
 			if host == "" {
 				host = s.SNI

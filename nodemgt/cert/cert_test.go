@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +60,92 @@ func TestTxtRecordNameIsRelativeToZone(t *testing.T) {
 	if txtRecordName("8787837.xyz", "8787837.xyz") != "_acme-challenge" {
 		t.Fatal("apex")
 	}
+	if txtRecordName("*.8787837.xyz", "8787837.xyz") != "_acme-challenge" {
+		t.Fatal("wildcard")
+	}
+}
+
+func TestIssueNamesCoversApexAndWildcard(t *testing.T) {
+	got := IssueNames("abc.com", true)
+	want := []string{"abc.com", "*.abc.com"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	if !reflect.DeepEqual(IssueNames("hk.abc.com", false), []string{"hk.abc.com"}) {
+		t.Fatal("subdomain")
+	}
+	if !reflect.DeepEqual(IssueNames("*.abc.com", false), []string{"abc.com", "*.abc.com"}) {
+		t.Fatal("wildcard input")
+	}
+	if !DefaultCoverWildcard("abc.com") || DefaultCoverWildcard("hk.abc.com") {
+		t.Fatal("default cover")
+	}
+	if UsableShareHost("abc.com", "hk.abc.com") != "hk.abc.com" {
+		t.Fatal("share domain")
+	}
+	if UsableShareHost("*.abc.com", "") != "abc.com" {
+		t.Fatal("wildcard share fallback")
+	}
+	if !HostCovered("abc.com", "hk.abc.com") || !HostCovered("abc.com", "abc.com") {
+		t.Fatal("covered")
+	}
+	if HostCovered("abc.com", "a.hk.abc.com") || HostCovered("abc.com", "other.com") {
+		t.Fatal("not covered")
+	}
+}
+
+func TestIssueRootRequiresCloudflare(t *testing.T) {
+	_, _, err := IssueRoot(context.Background(), RootIssue{Domain: "abc.com", Email: "ops@example.com"})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "cloudflare") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestIssueRootLocalCoversWildcard(t *testing.T) {
+	keyPEM, issued, err := IssueRoot(context.Background(), RootIssue{Domain: "abc.com", TestCA: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.ChainPEM == "" || keyPEM == "" {
+		t.Fatal("missing material")
+	}
+	block, _ := pem.Decode([]byte(issued.ChainPEM))
+	if block == nil {
+		t.Fatal("leaf pem")
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := leaf.VerifyHostname("abc.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := leaf.VerifyHostname("hk.abc.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tls.X509KeyPair([]byte(issued.ChainPEM), []byte(keyPEM)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCSRNamesMatchAllowsApexAndWildcard(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "abc.com"}, DNSNames: []string{"abc.com", "*.abc.com"},
+	}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
+	if err := CSRNamesMatch(csrPEM, []string{"abc.com", "*.abc.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := CSRNamesMatch(csrPEM, []string{"abc.com"}); err == nil {
+		t.Fatal("missing wildcard must fail")
+	}
 }
 
 func TestWaitTXTSeesValue(t *testing.T) {
@@ -98,6 +186,50 @@ func TestResolveZoneLooksUpApex(t *testing.T) {
 	}
 	if id != "zone-1" || name != "example.com" {
 		t.Fatalf("zone %s %s", id, name)
+	}
+}
+
+func TestCreateDNS01RecordsKeepsSiblingTXT(t *testing.T) {
+	var posts []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		posts = append(posts, body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"result":  map[string]string{"id": "rec-" + string(rune('1'+len(posts)-1))},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	prev := cfAPIBase
+	cfAPIBase = srv.URL
+	t.Cleanup(func() { cfAPIBase = prev })
+	pending := []pendingChal{
+		{name: "_acme-challenge", val: "token-apex"},
+		{name: "_acme-challenge", val: "token-wildcard"},
+	}
+	if err := createDNS01Records(context.Background(), Cloudflare{APIToken: "tok", ZoneID: "zone-1"}, pending); err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 2 {
+		t.Fatalf("posts %d", len(posts))
+	}
+	if posts[0]["content"] == posts[1]["content"] {
+		t.Fatal("wildcard and apex must keep distinct TXT values")
+	}
+	if posts[0]["name"] != "_acme-challenge" || posts[1]["name"] != "_acme-challenge" {
+		t.Fatal("both records belong on the apex challenge name")
+	}
+	if pending[0].recID == "" || pending[1].recID == "" || pending[0].recID == pending[1].recID {
+		t.Fatalf("ids %s %s", pending[0].recID, pending[1].recID)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nuomiiiii/lite/nodemgt/inboundcfg"
 	"github.com/nuomiiiii/lite/nodemgt/models"
 )
 
@@ -35,6 +36,151 @@ func TestRenderFormats(t *testing.T) {
 	links := DecodeShareLinks(body)
 	if len(links) == 0 {
 		t.Fatal("decode")
+	}
+}
+
+func TestShareNameUsesInboundNameForAllProtocols(t *testing.T) {
+	user := models.NodeUser{Username: "免流"}
+	creds := []models.Credential{{UUID: "u", Enabled: true}}
+	settings := `{"share_strategy":"other","public_host":"node.example.com","security":"none","transport":"ws","ws_path":"/ws"}`
+	for _, proto := range []string{"vless", "vmess", "trojan", "shadowsocks", "http", "hysteria2", "tuic", "anytls"} {
+		in := models.Inbound{
+			ID: proto + "-id", Name: "US_LAX_" + proto, Protocol: proto,
+			Listen: "0.0.0.0", Port: 443, Enabled: true, SettingsJSON: settings,
+		}
+		nodes := Assemble(user, []models.Inbound{in}, creds, map[string]bool{in.ID: true}, nil)
+		if len(nodes) != 1 {
+			t.Fatalf("%s: want 1 node, got %+v", proto, nodes)
+		}
+		if nodes[0].Name != in.Name {
+			t.Fatalf("%s: name %q, want inbound name %q", proto, nodes[0].Name, in.Name)
+		}
+		if strings.Contains(nodes[0].Name, user.Username+"-") {
+			t.Fatalf("%s: username leaked into share name: %q", proto, nodes[0].Name)
+		}
+		raw, _, err := Render("v2ray", nodes, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		link := DecodeShareLinks(raw)[0]
+		if strings.HasPrefix(link, "vmess://") {
+			payload, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(link, "vmess://"))
+			if err != nil {
+				t.Fatalf("%s: decode vmess: %v", proto, err)
+			}
+			if strings.Contains(string(payload), user.Username+"-") {
+				t.Fatalf("%s: vmess ps still prefixes username: %s", proto, payload)
+			}
+		} else if strings.Contains(link, user.Username+"-") {
+			t.Fatalf("%s: share link still prefixes username: %s", proto, link)
+		}
+	}
+	emptyName := Assemble(user, []models.Inbound{{
+		ID: "fallback-id", Protocol: "vmess", Listen: "1.2.3.4", Port: 443, Enabled: true,
+		SettingsJSON: settings,
+	}}, creds, map[string]bool{"fallback-id": true}, nil)
+	if len(emptyName) != 1 || emptyName[0].Name != "fallback-id" {
+		t.Fatalf("empty inbound name should fall back to id: %+v", emptyName)
+	}
+}
+
+func TestHTTPShareUsesUsernamePassword(t *testing.T) {
+	user := models.NodeUser{Username: "免流"}
+	in := models.Inbound{
+		ID: "http-in", Name: "US_HTTP", Protocol: "http",
+		Listen: "0.0.0.0", Port: 8080, Enabled: true,
+		SettingsJSON: `{"share_strategy":"other","public_host":"proxy.example.com","security":"none","transport":"tcp"}`,
+	}
+	nodes := Assemble(user, []models.Inbound{in}, []models.Credential{{UUID: "u-1", SecretMaterial: "secret", Enabled: true}}, map[string]bool{"http-in": true}, nil)
+	if len(nodes) != 1 || nodes[0].Protocol != "http" || nodes[0].Username != "免流" || nodes[0].Password != "secret" {
+		t.Fatalf("http node: %+v", nodes)
+	}
+	raw, _, err := Render("v2ray", nodes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := DecodeShareLinks(raw)[0]
+	if !strings.HasPrefix(link, "http://") || !strings.Contains(link, "secret") || strings.Contains(link, "免流-US_HTTP") {
+		t.Fatalf("http share link: %s", link)
+	}
+	parsed, ok := NodeFromShareLink(link)
+	if !ok || parsed.Protocol != "http" || parsed.Username != "免流" || parsed.Password != "secret" || parsed.Name != "US_HTTP" {
+		t.Fatalf("parse http share: %+v", parsed)
+	}
+	clash, _, err := Render("clash", nodes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(clash, "type: http") || !strings.Contains(clash, "udp: false") || strings.Contains(clash, "uuid:") {
+		t.Fatalf("clash http: %s", clash)
+	}
+	sing, _, err := Render("sing-box", nodes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sing, `"type": "http"`) || !strings.Contains(sing, `"username": "免流"`) || strings.Contains(sing, `"transport"`) {
+		t.Fatalf("sing-box http: %s", sing)
+	}
+}
+
+func TestSSShareUsesMethodPassword(t *testing.T) {
+	user := models.NodeUser{Username: "免流"}
+	in := models.Inbound{
+		ID: "ss-in", Name: "US_SS", Protocol: "shadowsocks",
+		Listen: "0.0.0.0", Port: 8388, Enabled: true,
+		SettingsJSON: `{"share_strategy":"other","public_host":"ss.example.com","ss_method":"aes-128-gcm","security":"none","transport":"tcp"}`,
+	}
+	nodes := Assemble(user, []models.Inbound{in}, []models.Credential{{UUID: "u-1", SecretMaterial: "secret", Enabled: true}}, map[string]bool{"ss-in": true}, nil)
+	if len(nodes) != 1 || nodes[0].Protocol != "shadowsocks" || nodes[0].Password != "secret" || nodes[0].Cipher != "aes-128-gcm" {
+		t.Fatalf("ss node: %+v", nodes)
+	}
+	raw, _, err := Render("v2ray", nodes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := DecodeShareLinks(raw)[0]
+	if !strings.HasPrefix(link, "ss://") || strings.Contains(link, "免流-US_SS") {
+		t.Fatalf("ss share link: %s", link)
+	}
+	parsed, ok := NodeFromShareLink(link)
+	if !ok || parsed.Protocol != "shadowsocks" || parsed.Password != "secret" || parsed.Cipher != "aes-128-gcm" || parsed.Name != "US_SS" {
+		t.Fatalf("parse ss share: %+v from %s", parsed, link)
+	}
+	clash, _, err := Render("clash", nodes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(clash, "type: ss") || !strings.Contains(clash, "cipher: aes-128-gcm") || !strings.Contains(clash, "secret") {
+		t.Fatalf("clash ss: %s", clash)
+	}
+	sing, _, err := Render("sing-box", nodes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sing, `"type": "shadowsocks"`) || !strings.Contains(sing, `"method": "aes-128-gcm"`) || !strings.Contains(sing, `"password": "secret"`) {
+		t.Fatalf("sing-box ss: %s", sing)
+	}
+}
+
+func TestSS2022ShareUsesCombinedPSK(t *testing.T) {
+	user := models.NodeUser{Username: "alice"}
+	in := models.Inbound{
+		ID: "ss-2022", Name: "US_SS2022", Protocol: "shadowsocks",
+		Listen: "0.0.0.0", Port: 8388, Enabled: true,
+		SettingsJSON: `{"share_strategy":"other","public_host":"ss.example.com","ss_method":"2022-blake3-aes-128-gcm","ss_password":"AAAAAAAAAAAAAAAAAAAAAA==","security":"none","transport":"tcp"}`,
+	}
+	nodes := Assemble(user, []models.Inbound{in}, []models.Credential{{UUID: "u-1", SecretMaterial: "secret", Enabled: true}}, map[string]bool{"ss-2022": true}, nil)
+	want := inboundcfg.SS2022SharePassword("AAAAAAAAAAAAAAAAAAAAAA==", "secret", "ss-2022", "2022-blake3-aes-128-gcm")
+	if len(nodes) != 1 || nodes[0].Password != want {
+		t.Fatalf("ss2022 node password %q want %q", nodes[0].Password, want)
+	}
+	raw, _, err := Render("v2ray", nodes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, ok := NodeFromShareLink(DecodeShareLinks(raw)[0])
+	if !ok || parsed.Password != want || parsed.Cipher != "2022-blake3-aes-128-gcm" {
+		t.Fatalf("parse ss2022: %+v", parsed)
 	}
 }
 
@@ -176,6 +322,22 @@ func TestAssemblePrefersIssuedCertDomain(t *testing.T) {
 	gotBound := AssembleWithCerts(models.NodeUser{Username: "alice"}, []models.Inbound{bound}, creds, granted, hosts, mixed)
 	if len(gotBound) != 1 || gotBound[0].Host != "bound.example.com" {
 		t.Fatalf("inbound cert_id domain: %+v", gotBound)
+	}
+	shared := in
+	shared.SettingsJSON = `{"share_strategy":"node","cert_id":"cert-root"}`
+	root := []models.Certificate{{
+		ID: "cert-root", NodeUUID: "node-1", Domain: "abc.com", ShareDomain: "hk.abc.com",
+		CoverWildcard: true, Status: models.CertIssued,
+	}}
+	gotShare := AssembleWithCerts(models.NodeUser{Username: "alice"}, []models.Inbound{shared}, creds, granted, hosts, root)
+	if len(gotShare) != 1 || gotShare[0].Host != "hk.abc.com" {
+		t.Fatalf("node share domain: %+v", gotShare)
+	}
+	custom := in
+	custom.SettingsJSON = `{"share_strategy":"node","cert_id":"cert-root","tls_domain":"us.abc.com"}`
+	gotTLS := AssembleWithCerts(models.NodeUser{Username: "alice"}, []models.Inbound{custom}, creds, granted, hosts, root)
+	if len(gotTLS) != 1 || gotTLS[0].Host != "us.abc.com" {
+		t.Fatalf("inbound tls_domain: %+v", gotTLS)
 	}
 }
 

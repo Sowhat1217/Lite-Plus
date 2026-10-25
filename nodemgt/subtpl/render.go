@@ -41,10 +41,26 @@ func Proxies(nodes []sub.Node, extra []string) ([]substore.Proxy, []string) {
 		if kind == "shadowsocks" {
 			kind = "ss"
 		}
-		p := substore.Proxy{"name": n.Name, "type": kind, "server": n.Host, "port": n.Port, "udp": true}
+		if kind == "https" {
+			kind = "http"
+		}
+		if kind == "socks5" {
+			kind = "socks"
+		}
+		p := substore.Proxy{"name": n.Name, "type": kind, "server": n.Host, "port": n.Port, "udp": kind != "http"}
 		switch kind {
 		case "ss":
 			p["cipher"], p["password"] = n.Cipher, n.Password
+		case "http", "socks":
+			if kind == "socks" {
+				p["type"] = "socks5"
+			}
+			if user := strings.TrimSpace(n.Username); user != "" {
+				p["username"] = user
+			} else if n.UUID != "" {
+				p["username"] = n.UUID
+			}
+			p["password"] = n.Password
 		case "trojan", "hysteria2", "anytls":
 			p["password"] = n.Password
 		case "tuic":
@@ -100,7 +116,7 @@ func Proxies(nodes []sub.Node, extra []string) ([]substore.Proxy, []string) {
 			continue
 		}
 		switch fmt.Sprint(p["type"]) {
-		case "ss", "vmess", "vless", "trojan", "hysteria", "hysteria2", "tuic", "anytls":
+		case "ss", "vmess", "vless", "trojan", "hysteria", "hysteria2", "tuic", "anytls", "http", "socks", "socks5":
 		default:
 			warnings = append(warnings, "An external node uses a protocol outside Lite-Plus subscription support")
 			continue

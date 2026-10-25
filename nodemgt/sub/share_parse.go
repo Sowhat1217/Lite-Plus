@@ -53,7 +53,11 @@ func parseURIShare(raw string) (Node, bool) {
 	switch protocol {
 	case "hy2":
 		protocol = "hysteria2"
-	case "vless", "trojan", "anytls", "hysteria2", "tuic":
+	case "https":
+		protocol = "http"
+	case "socks5":
+		protocol = "socks"
+	case "vless", "trojan", "anytls", "hysteria2", "tuic", "http", "socks":
 	default:
 		return Node{}, false
 	}
@@ -62,6 +66,12 @@ func parseURIShare(raw string) (Node, bool) {
 		return Node{}, false
 	}
 	port := 443
+	if protocol == "http" || protocol == "socks" {
+		port = 80
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		port = 443
+	}
 	if u.Port() != "" {
 		p, err := strconv.Atoi(u.Port())
 		if err != nil || p <= 0 || p > 65535 {
@@ -80,9 +90,14 @@ func parseURIShare(raw string) (Node, bool) {
 	security := strings.ToLower(firstQuery(q, "security", "tls"))
 	switch security {
 	case "":
-		if protocol == "vless" {
-			security = "none"
-		} else {
+		switch protocol {
+		case "vless", "http", "socks":
+			if strings.EqualFold(u.Scheme, "https") {
+				security = "tls"
+			} else {
+				security = "none"
+			}
+		default:
 			security = "tls"
 		}
 	case "1", "true":
@@ -123,6 +138,13 @@ func parseURIShare(raw string) (Node, bool) {
 	case "tuic":
 		n.UUID = user
 		n.Password = pass
+	case "http", "socks":
+		n.Username = user
+		n.UUID = user
+		n.Password = pass
+		if n.Password == "" {
+			n.Password = user
+		}
 	default:
 		n.Password = user
 		if n.Password == "" {

@@ -1259,6 +1259,72 @@ func (s *Store) DeleteSubscription(id string) error {
 	})
 }
 
+func (s *Store) ListRootCerts() ([]models.RootCertificate, error) {
+	var rows []models.RootCertificate
+	return rows, s.db.Order("created_at ASC").Find(&rows).Error
+}
+
+func (s *Store) GetRootCert(id string) (*models.RootCertificate, error) {
+	var row models.RootCertificate
+	err := s.db.First(&row, "id = ?", id).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (s *Store) GetRootCertByDomain(domain string) (*models.RootCertificate, error) {
+	var row models.RootCertificate
+	err := s.db.First(&row, "domain = ?", strings.ToLower(strings.TrimSpace(domain))).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (s *Store) UpsertRootCert(row *models.RootCertificate) error {
+	if row.ID == "" {
+		row.ID = newID()
+	}
+	if row.Status == "" {
+		row.Status = models.CertPending
+	}
+	row.UpdatedAt = now()
+	if row.CreatedAt.IsZero() {
+		row.CreatedAt = row.UpdatedAt
+	}
+	return s.db.Save(row).Error
+}
+
+func (s *Store) DeleteRootCert(id string) error {
+	var n int64
+	if err := s.db.Model(&models.Certificate{}).Where("root_cert_id = ?", id).Count(&n).Error; err != nil {
+		return err
+	}
+	if n > 0 {
+		return fmt.Errorf("%w: root certificate is in use", ErrConflict)
+	}
+	res := s.db.Delete(&models.RootCertificate{}, "id = ?", id)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) ListCertsByRoot(rootID string) ([]models.Certificate, error) {
+	var rows []models.Certificate
+	return rows, s.db.Where("root_cert_id = ?", rootID).Order("created_at ASC").Find(&rows).Error
+}
+
 func (s *Store) ListCerts(nodeUUID string) ([]models.Certificate, error) {
 	var rows []models.Certificate
 	q := s.db.Order("created_at ASC")
@@ -1342,7 +1408,7 @@ func (s *Store) EnqueueCommand(cmd *models.ControlCommand) error {
 			Where("node_uuid = ? AND kind = ? AND status IN ?", cmd.NodeUUID, "applyConfig", []string{models.CmdPending, models.CmdSent}).
 			Updates(map[string]any{"status": models.CmdSuperseded, "updated_at": now()}).Error
 	}
-	if cmd.Kind == "applyConfig" || cmd.Kind == "syncQuota" {
+	if cmd.Kind == "applyConfig" || cmd.Kind == "syncQuota" || cmd.Kind == "applyCert" {
 		sealed, err := secretcrypt.Seal(cmd.PayloadJSON)
 		if err != nil {
 			return err

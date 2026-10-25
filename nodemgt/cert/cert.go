@@ -51,11 +51,20 @@ type Cloudflare struct {
 }
 
 type Request struct {
-	Domain    string
-	Email     string
-	Directory string
-	CSRPEM    string
-	CF        Cloudflare
+	Domain        string
+	Names         []string
+	CoverWildcard bool
+	Email         string
+	Directory     string
+	CSRPEM        string
+	CF            Cloudflare
+}
+
+func (req Request) issueNames() []string {
+	if len(req.Names) > 0 {
+		return uniqueNames(req.Names...)
+	}
+	return IssueNames(req.Domain, req.CoverWildcard)
 }
 
 type Result struct {
@@ -76,6 +85,61 @@ func ParseCSR(pemBytes string) (*x509.CertificateRequest, error) {
 		return nil, fmt.Errorf("invalid CSR PEM")
 	}
 	return x509.ParseCertificateRequest(block.Bytes)
+}
+
+func GenerateKeyAndCSR(names []string) (keyPEM, csrPEM string, err error) {
+	names = uniqueNames(names...)
+	if len(names) == 0 {
+		return "", "", fmt.Errorf("domain required")
+	}
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return "", "", err
+	}
+	keyPEMBytes := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	tpl := &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: CommonName(names)},
+		DNSNames: names,
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, tpl, key)
+	if err != nil {
+		return "", "", err
+	}
+	return string(keyPEMBytes), string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})), nil
+}
+
+type RootIssue struct {
+	Domain    string
+	Email     string
+	Directory string
+	CF        Cloudflare
+	TestCA    bool
+}
+
+func IssueRoot(ctx context.Context, req RootIssue) (keyPEM string, issued *Result, err error) {
+	domain := RootDomain(req.Domain)
+	if domain == "" {
+		return "", nil, fmt.Errorf("domain required")
+	}
+	names := IssueNames(domain, true)
+	keyPEM, csrPEM, err := GenerateKeyAndCSR(names)
+	if err != nil {
+		return "", nil, err
+	}
+	if req.TestCA {
+		issued, err = IssueLocalTestCA(domain, csrPEM)
+		return keyPEM, issued, err
+	}
+	issued, err = IssueACME(ctx, Request{
+		Domain:        domain,
+		Names:         names,
+		CoverWildcard: true,
+		Email:         req.Email,
+		Directory:     req.Directory,
+		CSRPEM:        csrPEM,
+		CF:            req.CF,
+	})
+	return keyPEM, issued, err
 }
 
 func IssueLocalTestCA(domain string, csrPEM string) (*Result, error) {
@@ -104,10 +168,18 @@ func IssueLocalTestCA(domain string, csrPEM string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	dnsNames := uniqueNames(csr.DNSNames...)
+	if len(dnsNames) == 0 {
+		dnsNames = IssueNames(domain, false)
+	}
+	cn := strings.TrimSpace(csr.Subject.CommonName)
+	if cn == "" {
+		cn = CommonName(dnsNames)
+	}
 	leafTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: domain},
-		DNSNames:     []string{domain},
+		Subject:      pkix.Name{CommonName: cn},
+		DNSNames:     dnsNames,
 		NotBefore:    time.Now().UTC().Add(-time.Minute),
 		NotAfter:     time.Now().UTC().Add(90 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
@@ -143,7 +215,11 @@ func IssueACME(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	zoneID, zoneName, err := resolveZone(ctx, req.CF.APIToken, req.Domain)
+	names := req.issueNames()
+	if len(names) == 0 {
+		return nil, fmt.Errorf("domain required")
+	}
+	zoneID, zoneName, err := resolveZone(ctx, req.CF.APIToken, ApexOf(names[0]))
 	if err != nil {
 		return nil, err
 	}
@@ -162,14 +238,19 @@ func IssueACME(ctx context.Context, req Request) (*Result, error) {
 	if _, err := client.Register(ctx, acct, acme.AcceptTOS); err != nil && !isAlreadyReg(err) {
 		return nil, fmt.Errorf("acme register: %w", err)
 	}
-	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(req.Domain))
+	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(names...))
 	if err != nil {
 		return nil, fmt.Errorf("acme order: %w", err)
 	}
+	pending := make([]pendingChal, 0, len(order.AuthzURLs))
 	for _, authzURL := range order.AuthzURLs {
 		authz, err := client.GetAuthorization(ctx, authzURL)
 		if err != nil {
 			return nil, err
+		}
+		ident := NormalizeDomain(authz.Identifier.Value)
+		if ident == "" {
+			ident = names[0]
 		}
 		var chal *acme.Challenge
 		for _, c := range authz.Challenges {
@@ -185,20 +266,41 @@ func IssueACME(ctx context.Context, req Request) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		fqdn := challengeFQDN(req.Domain)
-		recID, err := upsertTXT(ctx, cf, txtRecordName(req.Domain, cf.ZoneName), fqdn, val)
+		pending = append(pending, pendingChal{
+			chal:  chal,
+			authz: authz,
+			fqdn:  challengeFQDN(ident),
+			name:  txtRecordName(ident, cf.ZoneName),
+			val:   val,
+		})
+	}
+	if err := createDNS01Records(ctx, cf, pending); err != nil {
+		return nil, err
+	}
+	defer func() {
+		for _, item := range pending {
+			deleteTXT(ctx, cf, item.recID)
+		}
+	}()
+	for _, item := range pending {
+		if err := waitTXT(ctx, item.fqdn, item.val); err != nil {
+			return nil, err
+		}
+	}
+	for _, item := range pending {
+		if _, err := client.Accept(ctx, item.chal); err != nil {
+			return nil, err
+		}
+	}
+	for _, item := range pending {
+		if _, err := client.WaitAuthorization(ctx, item.authz.URI); err != nil {
+			return nil, err
+		}
+	}
+	if order.URI != "" {
+		order, err = client.WaitOrder(ctx, order.URI)
 		if err != nil {
-			return nil, err
-		}
-		defer deleteTXT(ctx, cf, recID)
-		if err := waitTXT(ctx, fqdn, val); err != nil {
-			return nil, err
-		}
-		if _, err := client.Accept(ctx, chal); err != nil {
-			return nil, err
-		}
-		if _, err := client.WaitAuthorization(ctx, authz.URI); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("acme wait order: %w", err)
 		}
 	}
 	der, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csr.Raw, true)
@@ -255,8 +357,28 @@ func zoneCandidates(domain string) []string {
 	return out
 }
 
+type pendingChal struct {
+	chal  *acme.Challenge
+	authz *acme.Authorization
+	fqdn  string
+	name  string
+	val   string
+	recID string
+}
+
+func createDNS01Records(ctx context.Context, cf Cloudflare, pending []pendingChal) error {
+	for i := range pending {
+		recID, err := createTXT(ctx, cf, pending[i].name, pending[i].val)
+		if err != nil {
+			return fmt.Errorf("dns-01 txt %s: %w", pending[i].name, err)
+		}
+		pending[i].recID = recID
+	}
+	return nil
+}
+
 func challengeFQDN(domain string) string {
-	return "_acme-challenge." + strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
+	return ChallengeHost(domain)
 }
 
 func txtRecordName(domain, zoneName string) string {

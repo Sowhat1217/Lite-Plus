@@ -51,6 +51,7 @@ func TestPlusTablesMigrated(t *testing.T) {
 	require.Contains(t, names, "nodemgt_quota_ledger")
 	require.Contains(t, names, "nodemgt_control_commands")
 	require.Contains(t, names, "nodemgt_certs")
+	require.Contains(t, names, "nodemgt_root_certs")
 	require.Contains(t, names, "nodemgt_subscriptions")
 	require.Contains(t, names, "nodemgt_grants")
 	require.Contains(t, names, "nodemgt_user_ips")

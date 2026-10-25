@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -77,6 +78,61 @@ func TestHandleResultCompletesCSR(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, pending)
 	require.Equal(t, "applyCert", pending[0].Kind)
+}
+
+func TestHandleResultCompletesWildcardCSR(t *testing.T) {
+	st := testStore(t)
+	row := &models.Certificate{NodeUUID: "n1", Domain: "abc.com", CoverWildcard: true, ShareDomain: "hk.abc.com", Status: models.CertPending}
+	require.NoError(t, st.UpsertCert(row))
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "abc.com"}, DNSNames: []string{"abc.com", "*.abc.com"},
+	}, key)
+	require.NoError(t, err)
+	csrPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
+	cmd := &models.ControlCommand{
+		OperationID: "op-wild",
+		NodeUUID:    "n1",
+		Kind:        "needCSR",
+		PayloadJSON: `{"domain":"abc.com","cert_id":"` + row.ID + `","test_ca":true,"cover_wildcard":true,"dns_names":["abc.com","*.abc.com"]}`,
+	}
+	require.NoError(t, st.EnqueueCommand(cmd))
+	require.NoError(t, HandleResult(st, Result{
+		OperationID: "op-wild",
+		Status:      "applied",
+		CSRPEM:      csrPEM,
+		CertID:      row.ID,
+		Domain:      "abc.com",
+	}))
+	got, err := st.GetCert(row.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CertIssued, got.Status)
+	require.Equal(t, "hk.abc.com", got.ShareDomain)
+	require.True(t, got.CoverWildcard)
+}
+
+func TestIssueRootAndDeployToNode(t *testing.T) {
+	st := testStore(t)
+	root := &models.RootCertificate{Domain: "abc.com"}
+	require.NoError(t, IssueRootCert(context.Background(), st, root, true))
+	got, err := st.GetRootCert(root.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CertIssued, got.Status)
+	require.NotEmpty(t, got.KeyPEM)
+	require.NotEmpty(t, got.ChainPEM)
+	row := &models.Certificate{NodeUUID: "n1"}
+	require.NoError(t, DeployRootToNode(st, got, row, "hk.abc.com"))
+	saved, err := st.GetCert(row.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CertSourceRoot, saved.Source)
+	require.Equal(t, "hk.abc.com", saved.ShareDomain)
+	require.Equal(t, got.ID, saved.RootCertID)
+	pending, err := st.PendingCommands("n1")
+	require.NoError(t, err)
+	require.NotEmpty(t, pending)
+	require.Equal(t, "applyCert", pending[0].Kind)
+	require.True(t, strings.HasPrefix(pending[0].PayloadJSON, "enc:v1:"))
 }
 
 func TestEnqueueApplyConfig(t *testing.T) {

@@ -9,12 +9,20 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 
 本项目基于 [komari-monitor/komari](https://github.com/komari-monitor/komari) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时提供流量管理、成本中心、备份迁移、接入安全与适配电脑和手机的管理界面。
 
-**当前正式版：Lite-Plus [`0.0.3`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.3) · 配套 Agent [`0.0.0.4`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.0.4) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
+**当前正式版：Lite-Plus [`0.0.4`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.4) · 配套 Agent [`0.0.0.8`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.0.8) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
 
 [使用手册](https://nuomiiiii.github.io/Lite-document/) · [快速开始](#快速开始) · [功能概览](#功能概览) · [升级说明](#从旧版本升级) · [Agent](#agent-与远程管理) · [MCP 代理](#mcp-代理与-ai-授权) · [完整更新日志](https://github.com/nuomiiiii/Lite-Plus/releases)
 
 > [!WARNING]
 > Lite 只能部署在你拥有或已获得授权管理的设备上。请勿将其用于未经授权的访问、持久化、命令执行或其他滥用行为。管理员应启用 HTTPS 与双因素认证，并妥善保护 Agent Token 和备份文件。
+
+## 0.0.4
+
+- 签发管理可申请根域名证书（含通配），再下发到多个节点；节点上选择根证书并填写子域名即可。
+- 主控申请改为给该节点单独申请域名，不必跟根证书相同。证书文件只在节点上：Agent 先提交 CSR，主控再用 Cloudflare DNS-01 向 Let's Encrypt 签发，成功后把证书链下发回去。
+- 入站补齐 HTTP。
+- Shadowsocks 入站按完整协议可用，默认加密 `2022-blake3-aes-128-gcm`。
+- 订阅里的节点名称只用入站名称，不再拼用户名。
 
 ## 0.0.3
 

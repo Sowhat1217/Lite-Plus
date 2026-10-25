@@ -2,9 +2,7 @@ package control
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"strings"
 	"time"
@@ -209,13 +207,19 @@ func clipIssuer(s string) string {
 
 func completeCertFromCSR(ctx context.Context, st *store.Store, cmd models.ControlCommand, csrPEM string) error {
 	var payload struct {
-		CertID string `json:"cert_id"`
-		Domain string `json:"domain"`
-		TestCA bool   `json:"test_ca"`
+		CertID        string   `json:"cert_id"`
+		Domain        string   `json:"domain"`
+		TestCA        bool     `json:"test_ca"`
+		CoverWildcard bool     `json:"cover_wildcard"`
+		DNSNames      []string `json:"dns_names"`
 	}
 	_ = json.Unmarshal([]byte(commandPayloadJSON(cmd)), &payload)
 	certID, domain, testCA := payload.CertID, payload.Domain, payload.TestCA
-	if err := csrMatchesTask(csrPEM, domain); err != nil {
+	names := payload.DNSNames
+	if len(names) == 0 {
+		names = cert.IssueNames(domain, payload.CoverWildcard)
+	}
+	if err := csrMatchesTask(csrPEM, names); err != nil {
 		return err
 	}
 	if certID == "" {
@@ -238,10 +242,12 @@ func completeCertFromCSR(ctx context.Context, st *store.Store, cmd models.Contro
 		token, _ := st.GetSetting("cf_api_token")
 		email, _ := st.GetSetting("acme_email")
 		issued, err = cert.IssueACME(ctx, cert.Request{
-			Domain: domain,
-			Email:  email,
-			CSRPEM: csrPEM,
-			CF:     cert.Cloudflare{APIToken: token},
+			Domain:        domain,
+			Names:         names,
+			CoverWildcard: payload.CoverWildcard,
+			Email:         email,
+			CSRPEM:        csrPEM,
+			CF:            cert.Cloudflare{APIToken: token},
 		})
 	}
 	if err != nil {
@@ -287,29 +293,146 @@ func ApplyIssuedCert(st *store.Store, row *models.Certificate, issued *cert.Resu
 	return PushPending(st, row.NodeUUID)
 }
 
-func csrMatchesTask(csrPEM, domain string) error {
-	domain = strings.TrimSpace(domain)
+func IssueRootCert(ctx context.Context, st *store.Store, row *models.RootCertificate, testCA bool) error {
+	domain := cert.RootDomain(row.Domain)
 	if domain == "" {
 		return fmt.Errorf("%w: domain", store.ErrInvalid)
 	}
-	block, _ := pem.Decode([]byte(csrPEM))
-	if block == nil {
-		return fmt.Errorf("%w: csr", store.ErrInvalid)
+	row.Domain = domain
+	row.Status = models.CertPending
+	row.LastError = ""
+	if err := st.UpsertRootCert(row); err != nil {
+		return err
 	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	token, _ := st.GetSetting("cf_api_token")
+	email, _ := st.GetSetting("acme_email")
+	keyPEM, issued, err := cert.IssueRoot(ctx, cert.RootIssue{
+		Domain: domain,
+		Email:  email,
+		CF:     cert.Cloudflare{APIToken: token},
+		TestCA: testCA,
+	})
+	if err != nil {
+		row.Status = models.CertFailed
+		row.LastError = err.Error()
+		_ = st.UpsertRootCert(row)
+		return err
+	}
+	sealed, err := secretcrypt.Seal(keyPEM)
+	if err != nil {
+		row.Status = models.CertFailed
+		row.LastError = err.Error()
+		_ = st.UpsertRootCert(row)
+		return err
+	}
+	row.Status = models.CertIssued
+	row.KeyPEM = sealed
+	row.ChainPEM = issued.ChainPEM
+	row.Fingerprint = issued.Fingerprint
+	row.Issuer = issued.Issuer
+	row.NotAfter = &issued.NotAfter
+	row.LastError = ""
+	if err := st.UpsertRootCert(row); err != nil {
+		return err
+	}
+	children, err := st.ListCertsByRoot(row.ID)
 	if err != nil {
 		return err
 	}
-	if cn := strings.TrimSpace(csr.Subject.CommonName); cn != "" && !strings.EqualFold(cn, domain) {
-		return fmt.Errorf("%w: csr cn", store.ErrForbidden)
-	}
-	if len(csr.DNSNames) == 0 && (csr.Subject.CommonName == "" || !strings.EqualFold(csr.Subject.CommonName, domain)) {
-		return fmt.Errorf("%w: csr san", store.ErrForbidden)
-	}
-	for _, name := range csr.DNSNames {
-		if !strings.EqualFold(strings.TrimSpace(name), domain) {
-			return fmt.Errorf("%w: csr san", store.ErrForbidden)
+	for i := range children {
+		if err := PushRootToNode(st, row, &children[i]); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func DeployRootToNode(st *store.Store, root *models.RootCertificate, row *models.Certificate, shareDomain string) error {
+	if root == nil || strings.TrimSpace(root.ID) == "" {
+		return fmt.Errorf("%w: root certificate required", store.ErrInvalid)
+	}
+	if !strings.EqualFold(root.Status, models.CertIssued) {
+		return fmt.Errorf("%w: root certificate is not issued", store.ErrInvalid)
+	}
+	shareDomain = cert.NormalizeDomain(shareDomain)
+	if shareDomain == "" {
+		return fmt.Errorf("%w: subdomain required", store.ErrInvalid)
+	}
+	if !cert.HostCovered(root.Domain, shareDomain) {
+		return fmt.Errorf("%w: subdomain must be %s or a name under it", store.ErrInvalid, root.Domain)
+	}
+	if strings.TrimSpace(row.NodeUUID) == "" {
+		return fmt.Errorf("%w: node required", store.ErrInvalid)
+	}
+	row.RootCertID = root.ID
+	row.Domain = root.Domain
+	row.ShareDomain = shareDomain
+	row.CoverWildcard = true
+	row.Source = models.CertSourceRoot
+	row.CertPath = ""
+	row.KeyPath = ""
+	row.ChainPEM = ""
+	row.Fingerprint = root.Fingerprint
+	row.Issuer = root.Issuer
+	row.NotAfter = root.NotAfter
+	row.Status = models.CertIssued
+	row.LastError = ""
+	if err := st.UpsertCert(row); err != nil {
+		return err
+	}
+	return PushRootToNode(st, root, row)
+}
+
+func PushRootToNode(st *store.Store, root *models.RootCertificate, row *models.Certificate) error {
+	keyPEM, err := secretcrypt.Open(root.KeyPEM)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(keyPEM) == "" || strings.TrimSpace(root.ChainPEM) == "" {
+		return fmt.Errorf("%w: root certificate material missing", store.ErrInvalid)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"domain":    cert.FileKey(root.Domain),
+		"cert_id":   row.ID,
+		"chain_pem": root.ChainPEM,
+		"key_pem":   keyPEM,
+	})
+	if err != nil {
+		return err
+	}
+	if err := st.EnqueueCommand(&models.ControlCommand{
+		NodeUUID:    row.NodeUUID,
+		Kind:        "applyCert",
+		PayloadJSON: string(payload),
+	}); err != nil {
+		return err
+	}
+	return PushPending(st, row.NodeUUID)
+}
+
+func csrMatchesTask(csrPEM string, names []string) error {
+	if len(uniqueDNS(names)) == 0 {
+		return fmt.Errorf("%w: domain", store.ErrInvalid)
+	}
+	if err := cert.CSRNamesMatch(csrPEM, names); err != nil {
+		return fmt.Errorf("%w: %s", store.ErrForbidden, err.Error())
+	}
+	return nil
+}
+
+func uniqueDNS(names []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		n = cert.NormalizeDomain(n)
+		if n == "" {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		out = append(out, n)
+	}
+	return out
 }

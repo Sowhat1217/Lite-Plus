@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nuomiiiii/lite/nodemgt/cert"
 	"github.com/nuomiiiii/lite/nodemgt/inboundcfg"
 	"github.com/nuomiiiii/lite/nodemgt/models"
 )
@@ -22,6 +23,7 @@ type Node struct {
 	Host        string
 	Port        int
 	UUID        string
+	Username    string
 	Password    string
 	Security    string
 	Type        string
@@ -115,20 +117,20 @@ type certDomainIndex struct {
 func indexCertDomains(certs []models.Certificate) certDomainIndex {
 	idx := certDomainIndex{byID: map[string]string{}, byNode: map[string]string{}}
 	now := time.Now().UTC()
-	for _, cert := range certs {
-		if !strings.EqualFold(strings.TrimSpace(cert.Status), models.CertIssued) {
+	for _, row := range certs {
+		if !strings.EqualFold(strings.TrimSpace(row.Status), models.CertIssued) {
 			continue
 		}
-		domain := strings.TrimSpace(cert.Domain)
+		domain := cert.UsableShareHost(row.Domain, row.ShareDomain)
 		if domain == "" {
 			continue
 		}
-		if cert.NotAfter != nil && !cert.NotAfter.After(now) {
+		if row.NotAfter != nil && !row.NotAfter.After(now) {
 			continue
 		}
-		idx.byID[cert.ID] = domain
-		if _, ok := idx.byNode[cert.NodeUUID]; !ok {
-			idx.byNode[cert.NodeUUID] = domain
+		idx.byID[row.ID] = domain
+		if _, ok := idx.byNode[row.NodeUUID]; !ok {
+			idx.byNode[row.NodeUUID] = domain
 		}
 	}
 	return idx
@@ -216,13 +218,24 @@ func assembleWithAddrs(user models.NodeUser, inbounds []models.Inbound, creds []
 				sni = cfg.RealityServerNames
 			}
 		}
+		sharePass := password
+		cipher := cfg.SSMethod
+		if strings.EqualFold(in.Protocol, "shadowsocks") {
+			if cipher == "" {
+				cipher = inboundcfg.DefaultSSMethod()
+			}
+			if inboundcfg.IsSS2022(cipher) {
+				sharePass = inboundcfg.SS2022SharePassword(cfg.SSPassword, password, in.ID, cipher)
+			}
+		}
 		nodes = append(nodes, Node{
-			Name:        shareName(user, in),
+			Name:        shareName(in),
 			Protocol:    in.Protocol,
 			Host:        host,
 			Port:        port,
 			UUID:        uuid,
-			Password:    password,
+			Username:    strings.TrimSpace(user.Username),
+			Password:    sharePass,
 			Security:    security,
 			Type:        transport,
 			Path:        path,
@@ -236,7 +249,7 @@ func assembleWithAddrs(user models.NodeUser, inbounds []models.Inbound, creds []
 			ServiceName: serviceName,
 			ALPN:        cfg.ALPN,
 			Mode:        mode,
-			Cipher:      cfg.SSMethod,
+			Cipher:      cipher,
 		})
 	}
 	return nodes
@@ -274,19 +287,12 @@ func shareTransportFields(transport string, cfg inboundcfg.Settings) (path, host
 	}
 }
 
-func shareName(user models.NodeUser, in models.Inbound) string {
+func shareName(in models.Inbound) string {
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		name = strings.TrimSpace(in.ID)
 	}
-	if strings.EqualFold(strings.TrimSpace(in.Protocol), "vless") {
-		return name
-	}
-	userName := strings.TrimSpace(user.Username)
-	if userName == "" {
-		return name
-	}
-	return userName + "-" + name
+	return name
 }
 
 func shareAddress(in models.Inbound, cfg inboundcfg.Settings, addrs nodeAddr, certs certDomainIndex) (string, int, bool) {
@@ -304,7 +310,10 @@ func shareAddress(in models.Inbound, cfg inboundcfg.Settings, addrs nodeAddr, ce
 	case "other":
 		host = strings.TrimSpace(cfg.PublicHost)
 	default:
-		host = certs.domainFor(in.NodeUUID, cfg.CertID)
+		host = strings.TrimSpace(cfg.TLSDomain)
+		if host == "" {
+			host = certs.domainFor(in.NodeUUID, cfg.CertID)
+		}
 		if host == "" {
 			host = addrs.forStack(cfg.Stack)
 		}
@@ -396,14 +405,20 @@ func RenderClash(nodes []Node, extra []string) string {
 func clashProxy(n Node) string {
 	kind := clashType(n.Protocol)
 	var b strings.Builder
-	fmt.Fprintf(&b, "  - name: %q\n    type: %s\n    server: %s\n    port: %d\n    udp: true\n", n.Name, kind, n.Host, n.Port)
+	udp := kind != "http"
+	fmt.Fprintf(&b, "  - name: %q\n    type: %s\n    server: %s\n    port: %d\n    udp: %v\n", n.Name, kind, n.Host, n.Port, udp)
 	switch kind {
 	case "ss":
 		cipher := n.Cipher
 		if cipher == "" {
-			cipher = "aes-128-gcm"
+			cipher = inboundcfg.DefaultSSMethod()
 		}
 		fmt.Fprintf(&b, "    cipher: %s\n    password: %s\n", cipher, yamlQuote(n.Password))
+	case "http", "socks", "socks5":
+		if user := shareUsername(n); user != "" {
+			fmt.Fprintf(&b, "    username: %s\n", yamlQuote(user))
+		}
+		fmt.Fprintf(&b, "    password: %s\n", yamlQuote(n.Password))
 	case "trojan", "hysteria2", "anytls":
 		fmt.Fprintf(&b, "    password: %s\n", yamlQuote(n.Password))
 	case "tuic":
@@ -499,6 +514,10 @@ func clashType(p string) string {
 		return "tuic"
 	case "anytls":
 		return "anytls"
+	case "http", "https":
+		return "http"
+	case "socks", "socks5":
+		return "socks5"
 	default:
 		return "vless"
 	}
@@ -518,6 +537,10 @@ func singBoxType(p string) string {
 		return "tuic"
 	case "anytls":
 		return "anytls"
+	case "http", "https":
+		return "http"
+	case "socks", "socks5":
+		return "socks"
 	default:
 		return "vless"
 	}
@@ -539,10 +562,17 @@ func RenderSingBox(nodes []Node, extra []string) (string, error) {
 		case "shadowsocks":
 			method := n.Cipher
 			if method == "" {
-				method = "aes-128-gcm"
+				method = inboundcfg.DefaultSSMethod()
 			}
 			item["method"] = method
 			item["password"] = n.Password
+		case "http", "socks":
+			if user := shareUsername(n); user != "" {
+				item["username"] = user
+			}
+			if n.Password != "" {
+				item["password"] = n.Password
+			}
 		case "trojan", "hysteria2", "anytls":
 			item["password"] = n.Password
 		case "tuic":
@@ -590,7 +620,7 @@ func RenderSingBox(nodes []Node, extra []string) (string, error) {
 }
 
 func singBoxOutboundTransport(kind string, n Node) map[string]any {
-	if kind == "hysteria2" || kind == "tuic" || kind == "anytls" {
+	if kind == "hysteria2" || kind == "tuic" || kind == "anytls" || kind == "http" || kind == "socks" {
 		return nil
 	}
 	t := strings.ToLower(n.Type)
@@ -656,10 +686,24 @@ func RenderV2RayBase64(nodes []Node, extra []string) string {
 		if scheme == "ss" {
 			method := n.Cipher
 			if method == "" {
-				method = "aes-128-gcm"
+				method = inboundcfg.DefaultSSMethod()
 			}
-			userinfo := base64.StdEncoding.EncodeToString([]byte(method + ":" + n.Password))
-			u := url.URL{Scheme: "ss", Host: shareHostPort(n.Host, n.Port), User: url.User(userinfo)}
+			userinfo := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + n.Password))
+			link := "ss://" + userinfo + "@" + shareHostPort(n.Host, n.Port)
+			if n.Name != "" {
+				link += "#" + url.QueryEscape(n.Name)
+			}
+			lines = append(lines, link)
+			continue
+		}
+		if scheme == "http" || scheme == "https" || scheme == "socks" || scheme == "socks5" {
+			if scheme == "socks5" {
+				scheme = "socks"
+			}
+			if scheme == "http" && n.Security == "tls" {
+				scheme = "https"
+			}
+			u := url.URL{Scheme: scheme, Host: shareHostPort(n.Host, n.Port), User: url.UserPassword(shareUsername(n), n.Password)}
 			u.Fragment = n.Name
 			lines = append(lines, u.String())
 			continue
@@ -774,4 +818,11 @@ func orDefault(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+func shareUsername(n Node) string {
+	if name := strings.TrimSpace(n.Username); name != "" {
+		return name
+	}
+	return strings.TrimSpace(n.UUID)
 }
