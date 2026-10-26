@@ -80,6 +80,31 @@ func TestPublicDeliveryMatchesPreviewAndRespectsGrants(t *testing.T) {
 	require.Equal(t, "loon", w.Header().Get("X-Subscription-Client"))
 }
 
+func TestServePanelUsesListenPortIsolation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	st, row := subscriptionFixture(t)
+	path := "/sub/" + row.Token
+	panel := func(port int, host string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, path, nil)
+		c.Request.Host = host
+		c.Request.Header.Set("User-Agent", "mihomo/1.19")
+		servePanel(c, st, Config{ListenPort: port, Path: "/sub/"})
+		return w
+	}
+	served := panel(0, "127.0.0.1:28777")
+	require.Equal(t, 200, served.Code, served.Body.String())
+	require.NotEmpty(t, served.Header().Get("X-Subscription-Client"))
+	require.NotEqual(t, "not found", served.Body.String())
+	for _, host := range []string{"127.0.0.1:28777", "[::1]:28777", "127.0.0.1:37888", "[::1]:37888"} {
+		blocked := panel(2096, host)
+		require.Equal(t, http.StatusNotFound, blocked.Code, host)
+		require.Equal(t, "not found", blocked.Body.String(), host)
+		require.Empty(t, blocked.Header().Get("X-Subscription-Client"), host)
+	}
+}
+
 func TestOldSubscriptionBytesAndTokenSurviveEdits(t *testing.T) {
 	st, row := subscriptionFixture(t)
 	user, err := st.GetUser(row.UserID)

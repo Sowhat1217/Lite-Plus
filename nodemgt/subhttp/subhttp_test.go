@@ -1,6 +1,12 @@
 package subhttp
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+)
 
 func TestNormalizePathAndToken(t *testing.T) {
 	if got := NormalizePath("abc"); got != "/abc/" {
@@ -86,5 +92,32 @@ func TestFirstShareDomainSkipsWildcard(t *testing.T) {
 	}
 	if got := FirstShareDomain([]string{"*.example.com"}); got != "example.com" {
 		t.Fatalf("wildcard fallback %q", got)
+	}
+}
+
+func TestDedicatedListen(t *testing.T) {
+	if dedicatedListen(Config{}) || dedicatedListen(Config{ListenPort: -1}) || dedicatedListen(Config{ListenPort: 65536}) {
+		t.Fatal("zero/invalid port is panel delivery")
+	}
+	if !dedicatedListen(Config{ListenPort: 2096}) {
+		t.Fatal("dedicated listen should isolate subscriptions")
+	}
+}
+
+func TestPanelRejectsSubscriptionWhenListenPortSet(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := Config{ListenPort: 2096, Path: "/s3cret/"}
+	for _, host := range []string{"127.0.0.1:28777", "127.0.0.1:37888", "[::1]:28777", "[::1]:37888"} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/s3cret/tok", nil)
+		c.Request.Host = host
+		servePanel(c, nil, cfg)
+		if w.Code != http.StatusNotFound || w.Body.String() != "not found" {
+			t.Fatalf("host %s: %d %q", host, w.Code, w.Body.String())
+		}
+		if !c.IsAborted() {
+			t.Fatalf("host %s: panel should abort subscription", host)
+		}
 	}
 }

@@ -419,3 +419,16 @@ func TestApplyPlanToAssigneesKeepsRenewedExpiryWhenDurationUnchanged(t *testing.
 	require.NotNil(t, got.ExpiresAt)
 	require.Equal(t, now.Add(60*24*time.Hour), got.ExpiresAt.UTC())
 }
+
+func TestModifyClearsDeviceLimit(t *testing.T) {
+	svc := testSvc(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "limit", DeviceLimit: 3}
+	require.NoError(t, svc.Store.UpsertUser(user))
+	zero := 0
+	require.NoError(t, svc.Modify("admin", user.ID, "op-zero", nil, nil, &zero, nil))
+	got, err := svc.Store.GetUser(user.ID)
+	require.NoError(t, err)
+	require.Equal(t, 0, got.DeviceLimit)
+	neg := -1
+	require.ErrorIs(t, svc.Modify("admin", user.ID, "op-neg", nil, nil, &neg, nil), store.ErrInvalid)
+}

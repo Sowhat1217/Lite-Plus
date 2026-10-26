@@ -1,9 +1,11 @@
 package jsonrpc
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNodemgtUserListKeepsGoingIfResetSyncFails(t *testing.T) {
@@ -19,6 +21,23 @@ func TestNodemgtUserListKeepsGoingIfResetSyncFails(t *testing.T) {
 		return nil, nodemgtErr(err)
 	}`) {
 		t.Fatal("user.list still returns the traffic reset error")
+	}
+}
+
+func TestParseOptionalJSONTime(t *testing.T) {
+	got, set, err := parseOptionalJSONTime(nil)
+	if err != nil || set || got != nil {
+		t.Fatalf("omitted: got=%v set=%v err=%v", got, set, err)
+	}
+	got, set, err = parseOptionalJSONTime(json.RawMessage("null"))
+	if err != nil || !set || got != nil {
+		t.Fatalf("null: got=%v set=%v err=%v", got, set, err)
+	}
+	raw := json.RawMessage(`"2026-10-26T00:00:00Z"`)
+	got, set, err = parseOptionalJSONTime(raw)
+	want := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+	if err != nil || !set || got == nil || !got.Equal(want) {
+		t.Fatalf("rfc3339: got=%v set=%v err=%v", got, set, err)
 	}
 }
 

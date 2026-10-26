@@ -734,3 +734,46 @@ func TestGetUserViewMatchesList(t *testing.T) {
 	require.Equal(t, views[0].InboundIDs, got.InboundIDs)
 	require.Equal(t, views[0].InboundNames, got.InboundNames)
 }
+
+func TestUpsertInboundKeepsExplicitDisabled(t *testing.T) {
+	st := testDB(t)
+	in := &models.Inbound{NodeUUID: "n1", Name: "off", Protocol: "vless", Port: 443, Enabled: false}
+	require.NoError(t, st.UpsertInbound(in))
+	got, err := st.GetInbound(in.ID)
+	require.NoError(t, err)
+	require.False(t, got.Enabled)
+	in.Enabled = true
+	require.NoError(t, st.UpsertInbound(in))
+	got, err = st.GetInbound(in.ID)
+	require.NoError(t, err)
+	require.True(t, got.Enabled)
+	in.Enabled = false
+	require.NoError(t, st.UpsertInbound(in))
+	got, err = st.GetInbound(in.ID)
+	require.NoError(t, err)
+	require.False(t, got.Enabled)
+	ob := &models.Outbound{NodeUUID: "n1", Name: "ob-off", Protocol: "freedom", Enabled: false}
+	require.NoError(t, st.UpsertOutbound(ob))
+	savedOb, err := st.GetOutbound(ob.ID)
+	require.NoError(t, err)
+	require.False(t, savedOb.Enabled)
+	rt := &models.Route{NodeUUID: "n1", Name: "rt-off", Enabled: false}
+	require.NoError(t, st.UpsertRoute(rt))
+	savedRt, err := st.GetRoute(rt.ID)
+	require.NoError(t, err)
+	require.False(t, savedRt.Enabled)
+}
+
+func TestDeleteCertRejectsInboundReference(t *testing.T) {
+	st := testDB(t)
+	cert := &models.Certificate{NodeUUID: "n1", Domain: "tls.example", Source: models.CertSourceFile, Status: models.CertIssued, CertPath: "./a.crt", KeyPath: "./a.key"}
+	require.NoError(t, st.UpsertCert(cert))
+	in := &models.Inbound{NodeUUID: "n1", Name: "tls", Protocol: "vless", Port: 443, SettingsJSON: `{"cert_id":"` + cert.ID + `","security":"tls"}`}
+	require.NoError(t, st.UpsertInbound(in))
+	err := st.DeleteCert(cert.ID)
+	require.ErrorIs(t, err, ErrConflict)
+	_, err = st.GetCert(cert.ID)
+	require.NoError(t, err)
+	require.NoError(t, st.DeleteInbound(in.ID))
+	require.NoError(t, st.DeleteCert(cert.ID))
+}

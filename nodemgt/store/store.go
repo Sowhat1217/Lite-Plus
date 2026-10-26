@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/nuomiiiii/lite/pkg/trafficreset"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
@@ -35,6 +38,34 @@ type Store struct {
 }
 
 func New(db *gorm.DB) *Store { return &Store{db: db} }
+
+func (s *Store) saveAll(value any) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		attrs, err := columnAttrs(tx, value)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(value).Clauses(clause.OnConflict{DoNothing: true}).Create(attrs).Error; err != nil {
+			return err
+		}
+		return tx.Select("*").Updates(value).Error
+	})
+}
+
+func columnAttrs(tx *gorm.DB, value any) (map[string]any, error) {
+	stmt := &gorm.Statement{DB: tx}
+	if err := stmt.Parse(value); err != nil {
+		return nil, err
+	}
+	rv := reflect.Indirect(reflect.ValueOf(value))
+	attrs := make(map[string]any, len(stmt.Schema.DBNames))
+	for _, name := range stmt.Schema.DBNames {
+		field := stmt.Schema.FieldsByDBName[name]
+		val, _ := field.ValueOf(context.Background(), rv)
+		attrs[name] = val
+	}
+	return attrs, nil
+}
 
 func (s *Store) DB() *gorm.DB { return s.db }
 
@@ -175,7 +206,7 @@ func (s *Store) UpsertInbound(row *models.Inbound) error {
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = row.UpdatedAt
 	}
-	return s.db.Save(row).Error
+	return s.saveAll(row)
 }
 
 func (s *Store) DeleteInbound(id string) error {
@@ -240,7 +271,7 @@ func (s *Store) UpsertOutbound(row *models.Outbound) error {
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = row.UpdatedAt
 	}
-	return s.db.Save(row).Error
+	return s.saveAll(row)
 }
 
 func (s *Store) GetOutbound(id string) (*models.Outbound, error) {
@@ -309,7 +340,7 @@ func (s *Store) UpsertRoute(row *models.Route) error {
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = row.UpdatedAt
 	}
-	return s.db.Save(row).Error
+	return s.saveAll(row)
 }
 
 func (s *Store) GetRoute(id string) (*models.Route, error) {
@@ -1256,7 +1287,7 @@ func (s *Store) UpsertSubscription(row *models.Subscription) error {
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = row.UpdatedAt
 	}
-	if err := s.db.Save(row).Error; err != nil {
+	if err := s.saveAll(row); err != nil {
 		return err
 	}
 	row.Token = plain
@@ -1367,7 +1398,27 @@ func (s *Store) GetCert(id string) (*models.Certificate, error) {
 	return &row, nil
 }
 
+func (s *Store) inboundUsesCert(id string) (bool, error) {
+	var rows []models.Inbound
+	if err := s.db.Select("settings_json").Find(&rows).Error; err != nil {
+		return false, err
+	}
+	for _, row := range rows {
+		if inboundcfg.Parse(row.SettingsJSON).CertID == id {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (s *Store) DeleteCert(id string) error {
+	used, err := s.inboundUsesCert(id)
+	if err != nil {
+		return err
+	}
+	if used {
+		return fmt.Errorf("%w: certificate is in use", ErrConflict)
+	}
 	res := s.db.Delete(&models.Certificate{}, "id = ?", id)
 	if res.Error != nil {
 		return res.Error

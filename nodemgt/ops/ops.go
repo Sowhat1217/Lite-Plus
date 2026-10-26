@@ -306,7 +306,10 @@ func (s *Service) Modify(actor, userID, operationID string, quota *int64, rate *
 	if rate != nil {
 		user.RateLimitBps = *rate
 	}
-	if devices != nil && *devices > 0 {
+	if devices != nil {
+		if *devices < 0 {
+			return fmt.Errorf("%w: device_limit must be >= 0", store.ErrInvalid)
+		}
 		user.DeviceLimit = *devices
 	}
 	if expires != nil {

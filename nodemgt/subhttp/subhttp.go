@@ -243,6 +243,10 @@ func EnsurePath(st *store.Store) (string, error) {
 	return path, nil
 }
 
+func dedicatedListen(cfg Config) bool {
+	return cfg.ListenPort > 0 && cfg.ListenPort <= 65535
+}
+
 func Gate() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
@@ -256,14 +260,23 @@ func Gate() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		token, ok := TokenFromPath(c.Request.URL.Path, cfg.Path)
-		if !ok {
-			c.Next()
-			return
-		}
-		Write(c, st, token)
-		c.Abort()
+		servePanel(c, st, cfg)
 	}
+}
+
+func servePanel(c *gin.Context, st *store.Store, cfg Config) {
+	token, ok := TokenFromPath(c.Request.URL.Path, cfg.Path)
+	if !ok {
+		c.Next()
+		return
+	}
+	if dedicatedListen(cfg) {
+		c.String(http.StatusNotFound, "not found")
+		c.Abort()
+		return
+	}
+	Write(c, st, token)
+	c.Abort()
 }
 
 func Write(c *gin.Context, st *store.Store, token string) {
@@ -312,7 +325,7 @@ func Start() error {
 }
 
 func Apply(cfg Config) error {
-	if cfg.ListenPort > 0 {
+	if dedicatedListen(cfg) {
 		if err := cfg.ValidateTLS(); err != nil {
 			return err
 		}
@@ -322,7 +335,7 @@ func Apply(cfg Config) error {
 	if err := stopLocked(context.Background()); err != nil {
 		return err
 	}
-	if cfg.ListenPort <= 0 {
+	if !dedicatedListen(cfg) {
 		return nil
 	}
 	engine := gin.New()

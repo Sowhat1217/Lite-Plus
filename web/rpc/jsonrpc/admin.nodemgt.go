@@ -23,6 +23,7 @@ import (
 	"github.com/nuomiiiii/lite/nodemgt/subtpl"
 	"github.com/nuomiiiii/lite/pkg/rpc"
 	logger "github.com/nuomiiiii/lite/utils/log"
+	"gorm.io/gorm"
 )
 
 func init() {
@@ -250,10 +251,12 @@ type inboundUpsertParams struct {
 	ShareStrategy      string `json:"share_strategy"`
 }
 
+const defaultRealityDest = "addons.mozilla.org:443"
+
 func fillRealityInboundDefaults(p *inboundUpsertParams) error {
 	p.Transport = "tcp"
 	if strings.TrimSpace(p.RealityDest) == "" {
-		p.RealityDest = "www.microsoft.com:443"
+		p.RealityDest = defaultRealityDest
 	}
 	if strings.TrimSpace(p.Fingerprint) == "" {
 		p.Fingerprint = "chrome"
@@ -304,6 +307,9 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 	}
 	if p.Port <= 0 {
 		p.Port = 443
+	}
+	if p.Port > 65535 {
+		return nil, rpc.MakeError(rpc.InvalidParams, "invalid inbound port", nil)
 	}
 	if p.Stack == "" {
 		p.Stack = "ipv4"
@@ -866,9 +872,25 @@ func nodemgtUserList(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.Json
 	return rows, nil
 }
 
+func parseOptionalJSONTime(raw json.RawMessage) (*time.Time, bool, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return nil, false, nil
+	}
+	if trimmed == "null" {
+		return nil, true, nil
+	}
+	var at time.Time
+	if err := json.Unmarshal(raw, &at); err != nil {
+		return nil, false, err
+	}
+	return &at, true, nil
+}
+
 func nodemgtUserUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
 	var p struct {
 		models.NodeUser
+		ExpiresAt  json.RawMessage         `json:"expires_at"`
 		InboundIDs []string                `json:"inbound_ids"`
 		PlanID     string                  `json:"plan_id"`
 		ExtraLinks *[]models.UserExtraLink `json:"extra_links"`
@@ -876,76 +898,94 @@ func nodemgtUserUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.
 	if err := req.BindParams(&p); err != nil {
 		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
 	}
-	st := nodemgtST()
-	isNew := strings.TrimSpace(p.ID) == ""
-	before, _ := st.NodeIDsForUser(p.ID)
-	hadPlan := false
-	if !isNew {
-		if asg, err := st.ListAssignments(p.ID); err == nil {
-			hadPlan = len(asg) > 0
-		}
-	}
-	if len(p.InboundIDs) > 0 {
-		in, err := st.ListInbounds("")
-		if err != nil {
-			return nil, nodemgtErr(err)
-		}
-		byID := map[string]models.Inbound{}
-		for _, row := range in {
-			byID[row.ID] = row
-		}
-		if first, ok := byID[p.InboundIDs[0]]; ok {
-			p.NodeUUID = first.NodeUUID
-		}
-	}
-	planID := strings.TrimSpace(p.PlanID)
-	if planID != "" {
-		if plan, err := st.GetPlan(planID); err == nil && plan != nil {
-			p.RateLimitBps = plan.RateLimitBps
-		}
-	}
-	if err := st.SaveUserProfile(&p.NodeUser); err != nil {
-		return nil, nodemgtErr(err)
-	}
-	if err := st.ReplaceGrants(p.ID, p.InboundIDs); err != nil {
-		return nil, nodemgtErr(err)
-	}
-	if planID != "" {
-		asg, _ := st.ListAssignments(p.ID)
-		if len(asg) == 0 || asg[0].PlanID != planID {
-			if _, err := nodemgtOps().Assign(nodemgtActor(ctx), p.ID, planID, "", time.Now().UTC()); err != nil {
-				return nil, nodemgtErr(err)
-			}
-		}
-	} else if nodemgtShouldClearPlan(planID, hadPlan) {
-		if err := nodemgtOps().Unassign(nodemgtActor(ctx), p.ID, ""); err != nil {
-			return nil, nodemgtErr(err)
-		}
-	}
 	resetDay := p.TrafficResetDay
 	if resetDay < 0 || resetDay > 31 {
 		return nil, rpc.MakeError(rpc.InvalidParams, "traffic_reset_day must be 0-31", nil)
 	}
-	if err := st.SetUserExpiryAndReset(p.ID, p.ExpiresAt, resetDay, time.Now().UTC()); err != nil {
-		return nil, nodemgtErr(err)
+	expires, expiresSet, err := parseOptionalJSONTime(p.ExpiresAt)
+	if err != nil {
+		return nil, rpc.MakeError(rpc.InvalidParams, "invalid expires_at", nil)
 	}
-	if _, err := st.EnsureSubscription(p.ID); err != nil {
-		return nil, nodemgtErr(err)
-	}
-	if p.ExtraLinks != nil {
-		if err := st.ReplaceUserExtraLinks(p.ID, *p.ExtraLinks); err != nil {
-			return nil, nodemgtErr(err)
+	db := dbcore.GetDBInstance()
+	isNew := strings.TrimSpace(p.ID) == ""
+	before, _ := store.New(db).NodeIDsForUser(p.ID)
+	hadPlan := false
+	if !isNew {
+		if asg, err := store.New(db).ListAssignments(p.ID); err == nil {
+			hadPlan = len(asg) > 0
 		}
 	}
 	issuedSecret := ""
-	if isNew {
-		_, secret, err := st.IssueCredential(p.ID, "uuid", "", nil)
-		if err != nil {
-			return nil, nodemgtErr(err)
+	actor := nodemgtActor(ctx)
+	if txErr := db.Transaction(func(tx *gorm.DB) error {
+		st := store.New(tx)
+		if len(p.InboundIDs) > 0 {
+			in, err := st.ListInbounds("")
+			if err != nil {
+				return err
+			}
+			byID := map[string]models.Inbound{}
+			for _, row := range in {
+				byID[row.ID] = row
+			}
+			if first, ok := byID[p.InboundIDs[0]]; ok {
+				p.NodeUUID = first.NodeUUID
+			}
 		}
-		issuedSecret = secret
+		planID := strings.TrimSpace(p.PlanID)
+		if planID != "" {
+			if plan, err := st.GetPlan(planID); err == nil && plan != nil {
+				p.RateLimitBps = plan.RateLimitBps
+			}
+		}
+		if err := st.SaveUserProfile(&p.NodeUser); err != nil {
+			return err
+		}
+		if err := st.ReplaceGrants(p.ID, p.InboundIDs); err != nil {
+			return err
+		}
+		svc := ops.New(st)
+		if planID != "" {
+			asg, _ := st.ListAssignments(p.ID)
+			if len(asg) == 0 || asg[0].PlanID != planID {
+				if _, err := svc.Assign(actor, p.ID, planID, "", time.Now().UTC()); err != nil {
+					return err
+				}
+			}
+		} else if nodemgtShouldClearPlan(planID, hadPlan) {
+			if err := svc.Unassign(actor, p.ID, ""); err != nil {
+				return err
+			}
+		}
+		expiry := expires
+		if !expiresSet {
+			if user, err := st.GetUser(p.ID); err == nil {
+				expiry = user.ExpiresAt
+			}
+		}
+		if err := st.SetUserExpiryAndReset(p.ID, expiry, resetDay, time.Now().UTC()); err != nil {
+			return err
+		}
+		if _, err := st.EnsureSubscription(p.ID); err != nil {
+			return err
+		}
+		if p.ExtraLinks != nil {
+			if err := st.ReplaceUserExtraLinks(p.ID, *p.ExtraLinks); err != nil {
+				return err
+			}
+		}
+		if isNew {
+			_, secret, err := st.IssueCredential(p.ID, "uuid", "", nil)
+			if err != nil {
+				return err
+			}
+			issuedSecret = secret
+		}
+		return st.Audit(actor, "nodemgt.user.upsert", p.ID, p.Username)
+	}); txErr != nil {
+		return nil, nodemgtErr(txErr)
 	}
-	_ = st.Audit(nodemgtActor(ctx), "nodemgt.user.upsert", p.ID, p.Username)
+	st := store.New(db)
 	after, _ := st.NodeIDsForUser(p.ID)
 	nodemgtPushNodes(st, append(append([]string{}, before...), after...)...)
 	view, err := st.GetUserView(p.ID)

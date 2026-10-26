@@ -17,7 +17,7 @@ func TestFillRealityInboundDefaultsKeepsEmptyFlow(t *testing.T) {
 	if p.Transport != "tcp" {
 		t.Fatalf("transport: %q", p.Transport)
 	}
-	if p.RealityDest == "" || p.RealityServerNames == "" || p.Fingerprint == "" {
+	if p.RealityDest != defaultRealityDest || p.RealityServerNames == "" || p.Fingerprint == "" {
 		t.Fatalf("missing reality defaults: %+v", p)
 	}
 }
