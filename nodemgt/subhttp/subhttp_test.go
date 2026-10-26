@@ -42,8 +42,12 @@ func TestPublicURLOmitsDomainWhenHostEmpty(t *testing.T) {
 	cfg.KeyPath = "./data/tls/server.key"
 	cfg.Domain = "sub.example.com"
 	cfg.PublicHost = "203.0.113.9"
-	if got := PublicURL(cfg, "tok"); got != "https://sub.example.com:443/s3cret/tok" {
-		t.Fatalf("cert domain url: %q", got)
+	if got := PublicURL(cfg, "tok"); got != "https://203.0.113.9:443/s3cret/tok" {
+		t.Fatalf("reuse https keeps public host: %q", got)
+	}
+	cfg.PublicHost = ""
+	if got := PublicURL(cfg, "tok"); got != "/s3cret/tok" {
+		t.Fatalf("reuse https without public host: %q", got)
 	}
 }
 
@@ -53,7 +57,7 @@ func TestApplyPanelHTTPSReusesCertificate(t *testing.T) {
 	if !cfg.ReuseHTTPS || cfg.CertPath != "./data/tls/server.crt" || cfg.Domain != "abc.123.com" {
 		t.Fatalf("%+v", cfg)
 	}
-	if got := PublicURL(cfg, "tok"); got != "https://abc.123.com:25111/s3cret/tok" {
+	if got := PublicURL(cfg, "tok"); got != "https://127.0.0.1:25111/s3cret/tok" {
 		t.Fatalf("reuse url: %q", got)
 	}
 	applyPanelHTTPS(&cfg, false, "./data/tls/server.crt", "./data/tls/server.key", []string{"abc.123.com"})
@@ -62,6 +66,17 @@ func TestApplyPanelHTTPSReusesCertificate(t *testing.T) {
 	}
 	if err := (Config{ReuseHTTPS: true}).ValidateTLS(); err == nil {
 		t.Fatal("reuse without cert should fail")
+	}
+}
+
+func TestShareHostIgnoresCertificateDomain(t *testing.T) {
+	cfg := Config{PublicHost: "203.0.113.9", Domain: "*.example.com", CertPath: "./c", KeyPath: "./k"}
+	if got := cfg.shareHost(); got != "203.0.113.9" {
+		t.Fatalf("public host %q", got)
+	}
+	cfg.PublicHost = ""
+	if got := cfg.shareHost(); got != "" {
+		t.Fatalf("empty host %q", got)
 	}
 }
 

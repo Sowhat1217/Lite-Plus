@@ -688,8 +688,7 @@ func RenderV2RayBase64(nodes []Node, extra []string) string {
 			if method == "" {
 				method = inboundcfg.DefaultSSMethod()
 			}
-			userinfo := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + n.Password))
-			link := "ss://" + userinfo + "@" + shareHostPort(n.Host, n.Port)
+			link := "ss://" + ssShareUserinfo(method, n.Password) + "@" + shareHostPort(n.Host, n.Port)
 			if n.Name != "" {
 				link += "#" + url.QueryEscape(n.Name)
 			}
@@ -825,4 +824,32 @@ func shareUsername(n Node) string {
 		return name
 	}
 	return strings.TrimSpace(n.UUID)
+}
+
+func ssShareUserinfo(method, password string) string {
+	if inboundcfg.IsSS2022(method) {
+		return ssURIEscape(method, true) + ":" + ssURIEscape(password, false)
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(method + ":" + password))
+}
+
+func ssURIEscape(s string, keepColon bool) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		unreserved := c == '-' || c == '.' || c == '_' || c == '~' ||
+			c == '!' || c == '$' || c == '&' || c == '\'' || c == '(' || c == ')' ||
+			c == '*' || c == ',' || c == ';' || c == '=' ||
+			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if unreserved || (keepColon && c == ':') {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hex[c>>4])
+		b.WriteByte(hex[c&0x0F])
+	}
+	return b.String()
 }

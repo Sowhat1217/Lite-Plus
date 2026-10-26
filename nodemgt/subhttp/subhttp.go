@@ -35,9 +35,6 @@ func (cfg Config) TLS() bool {
 }
 
 func (cfg Config) shareHost() string {
-	if domain := strings.TrimSpace(cfg.Domain); domain != "" {
-		return domain
-	}
 	return strings.TrimSpace(cfg.PublicHost)
 }
 
@@ -220,9 +217,6 @@ func LoadConfig(st *store.Store) (Config, error) {
 		PublicHost: strings.TrimSpace(host),
 	}
 	applyPanelHTTPS(&cfg, reuse, panelCert, panelKey, panelDomains)
-	if cfg.ReuseHTTPS && cfg.Domain != "" && cfg.PublicHost == "" {
-		cfg.PublicHost = cfg.Domain
-	}
 	return cfg, nil
 }
 

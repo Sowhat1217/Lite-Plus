@@ -9,12 +9,17 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 
 本项目基于 [komari-monitor/komari](https://github.com/komari-monitor/komari) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时提供流量管理、成本中心、备份迁移、接入安全与适配电脑和手机的管理界面。
 
-**当前正式版：Lite-Plus [`0.0.5`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.5) · 配套 Agent [`0.0.0.9`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.0.9) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
+**当前正式版：Lite-Plus [`0.0.6`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.6) · 配套 Agent [`0.0.1.1`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.1.1) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
 
 [使用手册](https://nuomiiiii.github.io/Lite-document/) · [快速开始](#快速开始) · [功能概览](#功能概览) · [升级说明](#从旧版本升级) · [Agent](#agent-与远程管理) · [MCP 代理](#mcp-代理与-ai-授权) · [完整更新日志](https://github.com/nuomiiiii/Lite-Plus/releases)
 
 > [!WARNING]
 > Lite 只能部署在你拥有或已获得授权管理的设备上。请勿将其用于未经授权的访问、持久化、命令执行或其他滥用行为。管理员应启用 HTTPS 与双因素认证，并妥善保护 Agent Token 和备份文件。
+
+## 0.0.6
+
+- 优化 ss 协议相关逻辑。
+- 开启「复用内置 HTTPS」后，对外地址不再自动填入证书域名。
 
 ## 0.0.5
 
@@ -135,7 +140,7 @@ chmod +x Lite-linux-amd64
 
 ## Agent 与远程管理
 
-Lite-Plus 推荐配套 [Lite-Plus-agent `0.0.0.4`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.0.4)。先在后台添加节点，再打开该节点的“节点配置 → 部署指令”，复制完整命令到目标服务器执行。自动发现注册已下线，新安装和 Docker 重建均使用具体节点的部署指令。
+Lite-Plus 推荐配套 [Lite-Plus-agent `0.0.1.1`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.1.1)。先在后台添加节点，再打开该节点的“节点配置 → 部署指令”，复制完整命令到目标服务器执行。自动发现注册已下线，新安装和 Docker 重建均使用具体节点的部署指令。
 
 远程终端、文件管理和远程执行需要同时开启 Lite“系统设置 → 通用 → 允许远程管理”与 Agent 本地 `--enable-remote-control`，新安装默认关闭。进入远程功能时，已启用通行密钥的账号可用通行密钥验证；已启用两步验证但未使用通行密钥时输入当前验证码；未启用时重新输入管理员密码。浏览器远程终端单次最长 6 小时，空闲 30 分钟会结束。
 

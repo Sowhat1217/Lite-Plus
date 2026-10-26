@@ -510,6 +510,7 @@ func inboundView(row models.Inbound) map[string]any {
 		"tcp_header":           s.TCPHeader,
 		"tcp_host":             s.TCPHost,
 		"ss_method":            s.SSMethod,
+		"ss_password":          s.SSPassword,
 		"accounts":             s.Accounts,
 		"allow_transparent":    s.AllowTransparent,
 		"fingerprint":          s.Fingerprint,
@@ -1858,14 +1859,6 @@ func nodemgtSettingsSet(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc
 		cfg, err := subhttp.LoadConfig(st)
 		if err != nil {
 			return nil, nodemgtErr(err)
-		}
-		if p.SubReuseHTTPS != nil && *p.SubReuseHTTPS && cfg.Domain != "" {
-			if p.SubPublicHost == nil || strings.TrimSpace(*p.SubPublicHost) == "" {
-				if err := st.SetSetting("sub_public_host", cfg.Domain); err != nil {
-					return nil, nodemgtErr(err)
-				}
-				cfg.PublicHost = cfg.Domain
-			}
 		}
 		if err := cfg.ValidateTLS(); err != nil {
 			return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)

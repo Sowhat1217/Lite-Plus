@@ -31,4 +31,4 @@ Public delivery and administrator preview use the same generator and user-grant 
 - HTTP subscription URLs expose no template administration API.
 - Run `go test ./nodemgt/... ./web/rpc/jsonrpc`; in the web repository run `npm test` and `npm run build`.
 
-The adapter uses `github.com/MMWOrg/mmwX-plugins/proxyparser v0.4.0`. The upstream repository moved to `mmwx-group/mmwX-plugins`; its Go module path is unchanged. The MIT notice is included in `THIRD_PARTY_NOTICES/proxyparser-LICENSE`.
+The adapter uses `github.com/MMWOrg/mmwX-plugins/proxyparser v0.4.0`. The upstream repository moved to `mmwx-group/mmwX-plugins`; its Go module path is unchanged.

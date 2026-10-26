@@ -178,9 +178,19 @@ func TestSS2022ShareUsesCombinedPSK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, ok := NodeFromShareLink(DecodeShareLinks(raw)[0])
+	link := DecodeShareLinks(raw)[0]
+	if !strings.Contains(link, "ss://2022-blake3-aes-128-gcm:") {
+		t.Fatalf("ss2022 share must keep plaintext method: %s", link)
+	}
+	if strings.Contains(link, base64.RawURLEncoding.EncodeToString([]byte("2022-blake3-aes-128-gcm:"+want))) {
+		t.Fatalf("ss2022 share must not use SIP002 base64 userinfo: %s", link)
+	}
+	if !strings.Contains(link, "%3A") {
+		t.Fatalf("ss2022 combined PSK colon must be percent-encoded: %s", link)
+	}
+	parsed, ok := NodeFromShareLink(link)
 	if !ok || parsed.Password != want || parsed.Cipher != "2022-blake3-aes-128-gcm" {
-		t.Fatalf("parse ss2022: %+v", parsed)
+		t.Fatalf("parse ss2022: %+v from %s", parsed, link)
 	}
 }
 
