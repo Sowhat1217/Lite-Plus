@@ -35,6 +35,8 @@ type Settings struct {
 	TCPHost            string `json:"tcp_host,omitempty"`
 	SSMethod           string `json:"ss_method,omitempty"`
 	SSPassword         string `json:"ss_password,omitempty"`
+	Accounts           []ProxyAccount `json:"accounts,omitempty"`
+	AllowTransparent   bool           `json:"allow_transparent,omitempty"`
 	Fingerprint        string `json:"fingerprint,omitempty"`
 	SpiderX            string `json:"spider_x,omitempty"`
 	Sniffing           bool   `json:"sniffing,omitempty"`
@@ -42,6 +44,46 @@ type Settings struct {
 	RouteOnly          bool   `json:"route_only,omitempty"`
 	ExcludeFromSub     bool   `json:"exclude_from_sub,omitempty"`
 	ShareStrategy      string `json:"share_strategy,omitempty"`
+}
+
+type ProxyAccount struct {
+	User string `json:"user,omitempty"`
+	Pass string `json:"pass,omitempty"`
+}
+
+func NormalizeAccounts(rows []ProxyAccount) []ProxyAccount {
+	out := make([]ProxyAccount, 0, len(rows))
+	seen := map[string]struct{}{}
+	for _, row := range rows {
+		user := strings.TrimSpace(row.User)
+		pass := strings.TrimSpace(row.Pass)
+		if user == "" || pass == "" {
+			continue
+		}
+		if _, ok := seen[user]; ok {
+			continue
+		}
+		seen[user] = struct{}{}
+		out = append(out, ProxyAccount{User: user, Pass: pass})
+	}
+	return out
+}
+
+func RandomProxyAccount() ProxyAccount {
+	return ProxyAccount{User: randomProxyToken(8), Pass: randomProxyToken(12)}
+}
+
+func randomProxyToken(n int) string {
+	const alphabet = "abcdefghijkmnopqrstuvwxyz23456789"
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return strings.Repeat("x", n)
+	}
+	out := make([]byte, n)
+	for i, b := range buf {
+		out[i] = alphabet[int(b)%len(alphabet)]
+	}
+	return string(out)
 }
 
 func GenerateRealityKeys() (privateKey, publicKey string, err error) {

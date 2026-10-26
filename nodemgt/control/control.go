@@ -258,6 +258,45 @@ func completeCertFromCSR(ctx context.Context, st *store.Store, cmd models.Contro
 	return ApplyIssuedCert(st, row, issued, domain)
 }
 
+func RequestACME(st *store.Store, row *models.Certificate, testCA bool) error {
+	if strings.TrimSpace(row.Domain) == "" || strings.TrimSpace(row.NodeUUID) == "" {
+		return fmt.Errorf("%w: domain and node required", store.ErrInvalid)
+	}
+	if row.Source == models.CertSourceFile || row.Source == models.CertSourceRoot {
+		return fmt.Errorf("%w: source", store.ErrInvalid)
+	}
+	row.Source = models.CertSourceACME
+	row.CertPath = ""
+	row.KeyPath = ""
+	if err := st.UpsertCert(row); err != nil {
+		return err
+	}
+	names := cert.IssueNames(row.Domain, row.CoverWildcard)
+	payload, err := json.Marshal(map[string]any{
+		"domain":         row.Domain,
+		"cert_id":        row.ID,
+		"test_ca":        testCA,
+		"cover_wildcard": row.CoverWildcard,
+		"dns_names":      names,
+	})
+	if err != nil {
+		return err
+	}
+	if err := st.EnqueueCommand(&models.ControlCommand{
+		NodeUUID:    row.NodeUUID,
+		Kind:        "needCSR",
+		PayloadJSON: string(payload),
+	}); err != nil {
+		return err
+	}
+	row.Status = models.CertPending
+	row.LastError = ""
+	if err := st.UpsertCert(row); err != nil {
+		return err
+	}
+	return PushPending(st, row.NodeUUID)
+}
+
 func ApplyIssuedCert(st *store.Store, row *models.Certificate, issued *cert.Result, domain string) error {
 	if domain == "" {
 		domain = row.Domain

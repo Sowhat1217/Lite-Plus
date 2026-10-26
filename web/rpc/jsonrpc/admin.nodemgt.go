@@ -55,9 +55,11 @@ func init() {
 	reg("nodemgt.cert.request", nodemgtCertRequest, "Request a certificate")
 	reg("nodemgt.cert.renew", nodemgtCertRequest, "Renew a certificate")
 	reg("nodemgt.cert.delete", nodemgtCertDelete, "Delete a certificate")
+	reg("nodemgt.cert.set_auto_renew", nodemgtCertSetAutoRenew, "Set certificate auto-renew")
 	reg("nodemgt.root_cert.list", nodemgtRootCertList, "List root certificates")
 	reg("nodemgt.root_cert.issue", nodemgtRootCertIssue, "Issue a root domain certificate")
 	reg("nodemgt.root_cert.delete", nodemgtRootCertDelete, "Delete a root certificate")
+	reg("nodemgt.root_cert.set_auto_renew", nodemgtRootCertSetAutoRenew, "Set root certificate auto-renew")
 	reg("nodemgt.subscription.list", nodemgtSubList, "List subscriptions")
 	reg("nodemgt.subscription.upsert", nodemgtSubUpsert, "Create or update a subscription")
 	reg("nodemgt.subscription.delete", nodemgtSubDelete, "Delete a subscription")
@@ -236,6 +238,8 @@ type inboundUpsertParams struct {
 	TCPHeader          string `json:"tcp_header"`
 	TCPHost            string `json:"tcp_host"`
 	SSMethod           string `json:"ss_method"`
+	Accounts           []inboundcfg.ProxyAccount `json:"accounts"`
+	AllowTransparent   *bool                     `json:"allow_transparent"`
 	Fingerprint        string `json:"fingerprint"`
 	SpiderX            string `json:"spider_x"`
 	Sniffing           *bool  `json:"sniffing"`
@@ -423,6 +427,15 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 		ExcludeFromSub:     excludeFromSub,
 		ShareStrategy:      shareStrategy,
 	}
+	if strings.EqualFold(p.Protocol, "http") {
+		cfg.Accounts = inboundcfg.NormalizeAccounts(p.Accounts)
+		if len(cfg.Accounts) == 0 {
+			cfg.Accounts = []inboundcfg.ProxyAccount{inboundcfg.RandomProxyAccount()}
+		}
+		if p.AllowTransparent != nil {
+			cfg.AllowTransparent = *p.AllowTransparent
+		}
+	}
 	if inboundcfg.EffectiveRouteOnly(cfg) {
 		cfg.RouteOnly = true
 	}
@@ -497,6 +510,8 @@ func inboundView(row models.Inbound) map[string]any {
 		"tcp_header":           s.TCPHeader,
 		"tcp_host":             s.TCPHost,
 		"ss_method":            s.SSMethod,
+		"accounts":             s.Accounts,
+		"allow_transparent":    s.AllowTransparent,
 		"fingerprint":          s.Fingerprint,
 		"spider_x":             s.SpiderX,
 		"sniffing":             s.Sniffing,
@@ -1297,11 +1312,56 @@ func rootCertView(row models.RootCertificate) map[string]any {
 		"fingerprint": row.Fingerprint,
 		"issuer":      row.Issuer,
 		"not_after":   row.NotAfter,
+		"auto_renew":  row.AutoRenew,
 		"status":      row.Status,
 		"last_error":  row.LastError,
 		"created_at":  row.CreatedAt,
 		"updated_at":  row.UpdatedAt,
 	}
+}
+
+func nodemgtRootCertSetAutoRenew(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var p struct {
+		ID        string `json:"id"`
+		AutoRenew bool   `json:"auto_renew"`
+	}
+	_ = req.BindParams(&p)
+	if strings.TrimSpace(p.ID) == "" {
+		return nil, rpc.MakeError(rpc.InvalidParams, "id required", nil)
+	}
+	st := nodemgtST()
+	row, err := st.GetRootCert(p.ID)
+	if err != nil {
+		return nil, nodemgtErr(err)
+	}
+	row.AutoRenew = p.AutoRenew
+	if err := st.UpsertRootCert(row); err != nil {
+		return nil, nodemgtErr(err)
+	}
+	_ = st.Audit(nodemgtActor(ctx), "nodemgt.root_cert.set_auto_renew", row.ID, row.Domain)
+	return rootCertView(*row), nil
+}
+
+func nodemgtCertSetAutoRenew(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var p struct {
+		ID        string `json:"id"`
+		AutoRenew bool   `json:"auto_renew"`
+	}
+	_ = req.BindParams(&p)
+	if strings.TrimSpace(p.ID) == "" {
+		return nil, rpc.MakeError(rpc.InvalidParams, "id required", nil)
+	}
+	st := nodemgtST()
+	row, err := st.GetCert(p.ID)
+	if err != nil {
+		return nil, nodemgtErr(err)
+	}
+	row.AutoRenew = p.AutoRenew
+	if err := st.UpsertCert(row); err != nil {
+		return nil, nodemgtErr(err)
+	}
+	_ = st.Audit(nodemgtActor(ctx), "nodemgt.cert.set_auto_renew", row.ID, row.Domain)
+	return row, nil
 }
 
 func nodemgtCertRequest(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
@@ -1391,33 +1451,14 @@ func nodemgtCertRequest(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc
 	row.Source = models.CertSourceACME
 	row.CertPath = ""
 	row.KeyPath = ""
-	if err := st.UpsertCert(&row); err != nil {
-		return nil, nodemgtErr(err)
-	}
 	if strings.TrimSpace(p.CSRPEM) == "" {
-		names := cert.IssueNames(row.Domain, row.CoverWildcard)
-		payload, err := json.Marshal(map[string]any{
-			"domain":         row.Domain,
-			"cert_id":        row.ID,
-			"test_ca":        p.TestCA,
-			"cover_wildcard": row.CoverWildcard,
-			"dns_names":      names,
-		})
-		if err != nil {
-			return nil, nodemgtErr(err)
-		}
-		cmd := &models.ControlCommand{
-			NodeUUID:    p.NodeUUID,
-			Kind:        "needCSR",
-			PayloadJSON: string(payload),
-		}
-		if err := st.EnqueueCommand(cmd); err != nil {
-			return nil, nodemgtErr(err)
-		}
-		if err := control.PushPending(st, p.NodeUUID); err != nil {
+		if err := control.RequestACME(st, &row, p.TestCA); err != nil {
 			return nil, nodemgtErr(err)
 		}
 		return row, nil
+	}
+	if err := st.UpsertCert(&row); err != nil {
+		return nil, nodemgtErr(err)
 	}
 	var issued *cert.Result
 	var err error

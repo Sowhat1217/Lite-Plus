@@ -245,6 +245,7 @@ type RootCertificate struct {
 	Fingerprint string     `json:"fingerprint" gorm:"type:varchar(128)"`
 	Issuer      string     `json:"issuer" gorm:"type:varchar(64);not null;default:''"`
 	NotAfter    *time.Time `json:"not_after"`
+	AutoRenew   bool       `json:"auto_renew" gorm:"not null;default:true"`
 	Status      string     `json:"status" gorm:"type:varchar(16);not null;default:'pending'"`
 	LastError   string     `json:"last_error" gorm:"type:varchar(512)"`
 	CreatedAt   time.Time  `json:"created_at"`
@@ -264,6 +265,7 @@ type Certificate struct {
 	Issuer         string     `json:"issuer" gorm:"type:varchar(64);not null;default:''"`
 	Fingerprint    string     `json:"fingerprint" gorm:"type:varchar(128)"`
 	NotAfter       *time.Time `json:"not_after"`
+	AutoRenew      bool       `json:"auto_renew" gorm:"not null;default:true"`
 	CertPath       string     `json:"cert_path" gorm:"type:varchar(512)"`
 	KeyPath        string     `json:"key_path" gorm:"type:varchar(512)"`
 	ChainPEM       string     `json:"chain_pem,omitempty" gorm:"type:longtext"`

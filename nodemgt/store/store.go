@@ -42,7 +42,27 @@ func (s *Store) Migrate() error {
 	if err := dropLegacyUserIPIndex(s.db); err != nil {
 		return err
 	}
-	return s.db.AutoMigrate(models.All()...)
+	if err := s.db.AutoMigrate(models.All()...); err != nil {
+		return err
+	}
+	return s.backfillCertAutoRenew()
+}
+
+func (s *Store) backfillCertAutoRenew() error {
+	v, err := s.GetSetting("cert_auto_renew_backfill")
+	if err == nil && v == "1" {
+		return nil
+	}
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if err := s.db.Model(&models.Certificate{}).Where("1 = 1").Update("auto_renew", true).Error; err != nil {
+		return err
+	}
+	if err := s.db.Model(&models.RootCertificate{}).Where("1 = 1").Update("auto_renew", true).Error; err != nil {
+		return err
+	}
+	return s.SetSetting("cert_auto_renew_backfill", "1")
 }
 
 func dropLegacyUserIPIndex(db *gorm.DB) error {
@@ -1298,6 +1318,7 @@ func (s *Store) UpsertRootCert(row *models.RootCertificate) error {
 	row.UpdatedAt = now()
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = row.UpdatedAt
+		row.AutoRenew = true
 	}
 	return s.db.Save(row).Error
 }
@@ -1377,6 +1398,7 @@ func (s *Store) UpsertCert(row *models.Certificate) error {
 	row.UpdatedAt = now()
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = row.UpdatedAt
+		row.AutoRenew = true
 	}
 	return s.db.Save(row).Error
 }

@@ -612,6 +612,33 @@ func TestMarkCommandSentAndLatest(t *testing.T) {
 	require.Equal(t, "op-b", latest[0].OperationID)
 }
 
+func TestUpsertCertDefaultsAutoRenew(t *testing.T) {
+	st := testDB(t)
+	row := &models.Certificate{NodeUUID: "n1", Domain: "due.example"}
+	require.NoError(t, st.UpsertCert(row))
+	got, err := st.GetCert(row.ID)
+	require.NoError(t, err)
+	require.True(t, got.AutoRenew)
+	got.AutoRenew = false
+	require.NoError(t, st.UpsertCert(got))
+	off, err := st.GetCert(row.ID)
+	require.NoError(t, err)
+	require.False(t, off.AutoRenew)
+}
+
+func TestMultipleRootCertificates(t *testing.T) {
+	st := testDB(t)
+	a := &models.RootCertificate{Domain: "abc.com", Status: models.CertIssued}
+	b := &models.RootCertificate{Domain: "xyz.com", Status: models.CertIssued}
+	require.NoError(t, st.UpsertRootCert(a))
+	require.NoError(t, st.UpsertRootCert(b))
+	require.True(t, a.AutoRenew)
+	require.True(t, b.AutoRenew)
+	rows, err := st.ListRootCerts()
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+}
+
 func TestUpsertFileCertKeepsEmptyIssuer(t *testing.T) {
 	st := testDB(t)
 	row := &models.Certificate{

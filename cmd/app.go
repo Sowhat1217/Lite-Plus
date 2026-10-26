@@ -855,6 +855,15 @@ func registerScheduledWork() {
 	if err := corn.AddFunc("notifier:renewal", "@every 1m", notifier.CheckAutoRenewalScheduledWork); err != nil {
 		logger.ErrorArgs("server", "Failed to add auto-renewal scheduled task:", err)
 	}
+	if err := corn.AddFunc("nodemgt:cert-renew", "@every 15m", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		if err := control.RenewDue(ctx, store.New(dbcore.GetDBInstance()), time.Now().UTC(), false); err != nil {
+			logger.Warnf("nodemgt", "cert auto-renew: %v", err)
+		}
+	}); err != nil {
+		logger.ErrorArgs("server", "Failed to add certificate auto-renew task:", err)
+	}
 	if err := corn.AddFuncInLocation("notifier:expire", "0 0 9 * * *", timeutil.BeijingLocation, notifier.CheckExpireScheduledWork); err != nil {
 		logger.ErrorArgs("server", "Failed to add expire notification scheduled task:", err)
 	}
@@ -881,6 +890,13 @@ func registerScheduledWork() {
 	notifier.InitTrafficReportSchedule()
 	notifier.InitPingLossNotificationSchedule()
 	go notifier.CheckAutoRenewalScheduledWork()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		if err := control.RenewDue(ctx, store.New(dbcore.GetDBInstance()), time.Now().UTC(), false); err != nil {
+			logger.Warnf("nodemgt", "cert auto-renew: %v", err)
+		}
+	}()
 }
 
 const taskResultRetentionDays = 30

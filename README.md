@@ -9,12 +9,19 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 
 本项目基于 [komari-monitor/komari](https://github.com/komari-monitor/komari) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时提供流量管理、成本中心、备份迁移、接入安全与适配电脑和手机的管理界面。
 
-**当前正式版：Lite-Plus [`0.0.4`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.4) · 配套 Agent [`0.0.0.8`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.0.8) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
+**当前正式版：Lite-Plus [`0.0.5`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.5) · 配套 Agent [`0.0.0.9`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.0.9) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
 
 [使用手册](https://nuomiiiii.github.io/Lite-document/) · [快速开始](#快速开始) · [功能概览](#功能概览) · [升级说明](#从旧版本升级) · [Agent](#agent-与远程管理) · [MCP 代理](#mcp-代理与-ai-授权) · [完整更新日志](https://github.com/nuomiiiii/Lite-Plus/releases)
 
 > [!WARNING]
 > Lite 只能部署在你拥有或已获得授权管理的设备上。请勿将其用于未经授权的访问、持久化、命令执行或其他滥用行为。管理员应启用 HTTPS 与双因素认证，并妥善保护 Agent Token 和备份文件。
+
+## 0.0.5
+
+- HTTP 入站可填写账号密码，也可开关「允许透明」。新建会自动生成一组账户。
+- 签发管理没有根证书时不再显示「暂无记录」；可申请多个不同根域的证书。
+- 新建证书默认「根证书下发」。主控申请和根域证书在到期前可开关自动续签，默认开启。
+- 用户列表在高缩放屏幕上一屏展示完，不再错位。
 
 ## 0.0.4
 

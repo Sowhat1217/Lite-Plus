@@ -102,6 +102,18 @@ func TestShadowsocksForcesTCPAndDropsHTTPHeader(t *testing.T) {
 	}
 }
 
+func TestNormalizeAccountsDropsBlankAndDuplicates(t *testing.T) {
+	got := NormalizeAccounts([]ProxyAccount{
+		{User: " a ", Pass: "1"},
+		{User: "", Pass: "x"},
+		{User: "a", Pass: "2"},
+		{User: "b", Pass: ""},
+	})
+	if len(got) != 1 || got[0].User != "a" || got[0].Pass != "1" {
+		t.Fatalf("got %#v", got)
+	}
+}
+
 func TestHTTPForcesTCPAndRejectsReality(t *testing.T) {
 	if got := DefaultCore("http"); got != "xray" {
 		t.Fatalf("http core %s", got)

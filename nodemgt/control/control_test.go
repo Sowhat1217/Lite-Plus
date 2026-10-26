@@ -265,3 +265,85 @@ func TestHandleResultIgnoresFileStatusForACMECert(t *testing.T) {
 	require.Equal(t, models.CertPending, got.Status)
 	require.Empty(t, got.Fingerprint)
 }
+
+func TestRenewDueEnqueuesACMEAndSkipsDisabled(t *testing.T) {
+	st := testStore(t)
+	now := time.Now().UTC()
+	soon := now.Add(24 * time.Hour)
+	due := &models.Certificate{
+		NodeUUID: "n1",
+		Domain:   "due.example",
+		Source:   models.CertSourceACME,
+		Status:   models.CertIssued,
+		NotAfter: &soon,
+	}
+	require.NoError(t, st.UpsertCert(due))
+	off := &models.Certificate{
+		NodeUUID: "n1",
+		Domain:   "off.example",
+		Source:   models.CertSourceACME,
+		Status:   models.CertIssued,
+		NotAfter: &soon,
+	}
+	require.NoError(t, st.UpsertCert(off))
+	off.AutoRenew = false
+	require.NoError(t, st.UpsertCert(off))
+	file := &models.Certificate{
+		NodeUUID: "n1",
+		Domain:   "file.example",
+		Source:   models.CertSourceFile,
+		CertPath: "/c.pem",
+		KeyPath:  "/k.pem",
+		Status:   models.CertIssued,
+		NotAfter: &soon,
+	}
+	require.NoError(t, st.UpsertCert(file))
+	require.NoError(t, RenewDue(context.Background(), st, now, true))
+	pending, err := st.PendingCommands("n1")
+	require.NoError(t, err)
+	var need int
+	for _, cmd := range pending {
+		if cmd.Kind == "needCSR" {
+			need++
+		}
+	}
+	require.Equal(t, 1, need)
+	got, err := st.GetCert(due.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CertPending, got.Status)
+	require.True(t, got.AutoRenew)
+	skipped, err := st.GetCert(off.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CertIssued, skipped.Status)
+	require.False(t, skipped.AutoRenew)
+}
+
+func TestRenewDueReissuesRootAndLeavesChildrenToPush(t *testing.T) {
+	st := testStore(t)
+	root := &models.RootCertificate{Domain: "abc.com"}
+	require.NoError(t, IssueRootCert(context.Background(), st, root, true))
+	got, err := st.GetRootCert(root.ID)
+	require.NoError(t, err)
+	require.True(t, got.AutoRenew)
+	other := &models.RootCertificate{Domain: "xyz.com"}
+	require.NoError(t, IssueRootCert(context.Background(), st, other, true))
+	listed, err := st.ListRootCerts()
+	require.NoError(t, err)
+	require.Len(t, listed, 2)
+	soon := time.Now().UTC().Add(time.Hour)
+	got.NotAfter = &soon
+	require.NoError(t, st.UpsertRootCert(got))
+	row := &models.Certificate{NodeUUID: "n1"}
+	require.NoError(t, DeployRootToNode(st, got, row, "hk.abc.com"))
+	require.NoError(t, RenewDue(context.Background(), st, time.Now().UTC(), true))
+	renewed, err := st.GetRootCert(root.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CertIssued, renewed.Status)
+	require.NotNil(t, renewed.NotAfter)
+	require.True(t, renewed.NotAfter.After(soon.Add(24*time.Hour)))
+	fresh, err := st.GetRootCert(other.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CertIssued, fresh.Status)
+	require.NotNil(t, fresh.NotAfter)
+	require.True(t, fresh.NotAfter.After(time.Now().UTC().Add(60*24*time.Hour)))
+}
