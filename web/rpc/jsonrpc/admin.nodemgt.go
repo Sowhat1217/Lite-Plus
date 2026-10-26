@@ -684,7 +684,7 @@ func nodemgtOutboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *
 			p.Security = "tls"
 		}
 	}
-	cfg, _ := json.Marshal(map[string]any{
+	cfgMap := map[string]any{
 		"address":            p.Address,
 		"port":               p.DestPort,
 		"username":           p.Username,
@@ -699,13 +699,20 @@ func nodemgtOutboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *
 		"ws_path":            p.WSPath,
 		"ws_host":            p.WSHost,
 		"grpc_service":       p.GRPCService,
-		"ss_method":          p.SSMethod,
 		"via_outbound":       p.ViaOutbound,
 		"reality_public_key": p.RealityPublicKey,
 		"reality_short_id":   p.RealityShortID,
 		"spider_x":           p.SpiderX,
 		"source_inbound_id":  p.SourceInboundID,
-	})
+	}
+	if strings.EqualFold(p.Protocol, "shadowsocks") {
+		method := strings.TrimSpace(p.SSMethod)
+		if method == "" {
+			method = inboundcfg.DefaultSSMethod()
+		}
+		cfgMap["ss_method"] = method
+	}
+	cfg, _ := json.Marshal(cfgMap)
 	p.SettingsJSON = string(cfg)
 	st := nodemgtST()
 	if err := st.UpsertOutbound(&p.Outbound); err != nil {
