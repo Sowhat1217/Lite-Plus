@@ -9,7 +9,7 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 
 本项目基于 [komari-monitor/komari](https://github.com/komari-monitor/komari) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时提供流量管理、成本中心、备份迁移、接入安全与适配电脑和手机的管理界面。
 
-**当前正式版：Lite-Plus [`0.0.7`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.7) · 配套 Agent [`0.0.1.3`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.1.3) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
+**当前正式版：Lite-Plus [`0.0.7`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.7) · 配套 Agent [`0.0.1.4`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.1.4) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
 
 [使用手册](https://nuomiiiii.github.io/Lite-document/) · [快速开始](#快速开始) · [功能概览](#功能概览) · [升级说明](#从旧版本升级) · [Agent](#agent-与远程管理) · [MCP 代理](#mcp-代理与-ai-授权) · [完整更新日志](https://github.com/nuomiiiii/Lite-Plus/releases)
 
@@ -18,6 +18,7 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 
 ## 0.0.7
 
+- sing-box 的 VLESS 入站也可配置 Flow（Vision），和 Xray 一样。用户上选了 Flow 会覆盖入站默认值，订阅也会带上。
 - 修复订阅设置独立监听端口后，仍能从面板 HTTP / HTTPS（含自定义面板端口）拉取订阅的bug。
 - 优化订阅监听端口、反代端口，以及对外地址预填的UI显示。
 - 修复 HTTP 下无法复制订阅地址、入站地址的bug。
@@ -26,7 +27,8 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 - 修复在线 IP 上限设为 0（不限制）保存后失效，以及编辑用户时未改到期时间却被覆盖的bug。
 - 修复关闭中的入站、出站、路由保存后又被打开，以及仍被入站使用的证书仍可删除的bug。
 - 修复订阅预览把带路径的 https 地址当成节点链接的bug。
-- 修复部分在线用户看不到在线 IP 的bug。节点上的 IP 限制和路由匹配需把节点升到 Lite-Plus-agent `0.0.1.3`。
+- 修复部分在线用户看不到在线 IP 的bug。
+- 节点上的 IP 限制和路由匹配和 sing-box 的 VLESS 配置 Vision 需搭配 Lite-Plus-agent `0.0.1.4`使用。
 
 ## 0.0.6
 

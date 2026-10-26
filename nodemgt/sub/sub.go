@@ -256,7 +256,7 @@ func assembleWithAddrs(user models.NodeUser, inbounds []models.Inbound, creds []
 }
 
 func shareFlow(in models.Inbound, cfg inboundcfg.Settings, user models.NodeUser, transport, security string) string {
-	if strings.EqualFold(strings.TrimSpace(in.Core), models.CoreSingBox) {
+	if !strings.EqualFold(strings.TrimSpace(in.Protocol), "vless") {
 		return ""
 	}
 	if transport != "tcp" && transport != "raw" {
@@ -268,6 +268,9 @@ func shareFlow(in models.Inbound, cfg inboundcfg.Settings, user models.NodeUser,
 	flow := cfg.Flow
 	if strings.TrimSpace(user.Flow) != "" {
 		flow = user.Flow
+	}
+	if strings.EqualFold(strings.TrimSpace(in.Core), models.CoreSingBox) && strings.Contains(strings.ToLower(flow), "vision") {
+		return "xtls-rprx-vision"
 	}
 	return flow
 }

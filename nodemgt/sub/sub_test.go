@@ -496,15 +496,51 @@ func TestAssembleWithoutGrantSkipsOthers(t *testing.T) {
 	}
 }
 
-func TestShareOmitsVisionForSingBox(t *testing.T) {
+func TestShareKeepsVisionForSingBox(t *testing.T) {
 	in := models.Inbound{
 		ID: "n", Core: models.CoreSingBox, Name: "sb", Protocol: "vless",
 		Listen: "0.0.0.0", Port: 443, Enabled: true,
 		SettingsJSON: `{"share_strategy":"other","public_host":"sb.example.com","security":"reality","transport":"tcp","flow":"xtls-rprx-vision"}`,
 	}
 	nodes := Assemble(models.NodeUser{Username: "alice", Flow: "xtls-rprx-vision"}, []models.Inbound{in}, []models.Credential{{UUID: "u", Enabled: true}}, map[string]bool{"n": true}, nil)
+	if len(nodes) != 1 || nodes[0].Flow != "xtls-rprx-vision" {
+		t.Fatalf("sing-box share must emit vision: %+v", nodes)
+	}
+}
+
+func TestShareOmitsUserVisionOnAnyTLS(t *testing.T) {
+	in := models.Inbound{
+		ID: "n", Core: models.CoreSingBox, Name: "anytls-in", Protocol: "anytls",
+		Listen: "0.0.0.0", Port: 443, Enabled: true,
+		SettingsJSON: `{"share_strategy":"other","public_host":"any.example.com","security":"reality","transport":"tcp"}`,
+	}
+	nodes := Assemble(models.NodeUser{Username: "alice", Flow: "xtls-rprx-vision"}, []models.Inbound{in}, []models.Credential{{UUID: "u", SecretMaterial: "any-secret", Enabled: true}}, map[string]bool{"n": true}, nil)
 	if len(nodes) != 1 || nodes[0].Flow != "" {
-		t.Fatalf("sing-box share must not emit vision: %+v", nodes)
+		t.Fatalf("anytls share must not emit vision: %+v", nodes)
+	}
+}
+
+func TestShareNormalizesSingBoxUdp443Vision(t *testing.T) {
+	in := models.Inbound{
+		ID: "n", Core: models.CoreSingBox, Name: "sb", Protocol: "vless",
+		Listen: "0.0.0.0", Port: 443, Enabled: true,
+		SettingsJSON: `{"share_strategy":"other","public_host":"sb.example.com","security":"reality","transport":"tcp"}`,
+	}
+	nodes := Assemble(models.NodeUser{Username: "alice", Flow: "xtls-rprx-vision-udp443"}, []models.Inbound{in}, []models.Credential{{UUID: "u", Enabled: true}}, map[string]bool{"n": true}, nil)
+	if len(nodes) != 1 || nodes[0].Flow != "xtls-rprx-vision" {
+		t.Fatalf("sing-box share must map udp443 to vision: %+v", nodes)
+	}
+}
+
+func TestShareKeepsXrayUdp443(t *testing.T) {
+	in := models.Inbound{
+		ID: "n", Core: models.CoreXray, Name: "xray", Protocol: "vless",
+		Listen: "0.0.0.0", Port: 443, Enabled: true,
+		SettingsJSON: `{"share_strategy":"other","public_host":"xray.example.com","security":"tls","transport":"tcp"}`,
+	}
+	nodes := Assemble(models.NodeUser{Username: "alice", Flow: "xtls-rprx-vision-udp443"}, []models.Inbound{in}, []models.Credential{{UUID: "u", Enabled: true}}, map[string]bool{"n": true}, nil)
+	if len(nodes) != 1 || nodes[0].Flow != "xtls-rprx-vision-udp443" {
+		t.Fatalf("xray share must keep udp443: %+v", nodes)
 	}
 }
 
