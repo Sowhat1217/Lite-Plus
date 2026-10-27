@@ -198,6 +198,25 @@ func TestSniffingJSON(t *testing.T) {
 	}
 }
 
+func TestShareSNIPrefersRealityDestOverLeftoverTLS(t *testing.T) {
+	got := ShareSNI(Settings{
+		Security:           "reality",
+		SNI:                "ppfla.8787837.xyz",
+		TLSDomain:          "ppfla.8787837.xyz",
+		RealityDest:        "addons.mozilla.org:443",
+		RealityServerNames: "addons.mozilla.org",
+	})
+	if got != "addons.mozilla.org" {
+		t.Fatalf("share sni %q", got)
+	}
+	if got := ShareSNI(Settings{Security: "tls", SNI: "edge.example.com"}); got != "edge.example.com" {
+		t.Fatalf("tls sni %q", got)
+	}
+	if got := ShareSNI(Settings{Security: "reality", SNI: "left.over", RealityDest: "www.microsoft.com:443"}); got != "www.microsoft.com" {
+		t.Fatalf("reality dest fallback %q", got)
+	}
+}
+
 func TestRealitySniffingForcesRouteOnly(t *testing.T) {
 	s := Settings{Sniffing: true, Security: "reality", Flow: "xtls-rprx-vision"}
 	if !EffectiveRouteOnly(s) {

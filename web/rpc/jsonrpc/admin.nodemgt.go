@@ -459,6 +459,9 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 	if inboundcfg.EffectiveRouteOnly(cfg) {
 		cfg.RouteOnly = true
 	}
+	if strings.EqualFold(p.Security, "reality") {
+		cfg.SNI = inboundcfg.ShareSNI(cfg)
+	}
 	if strings.EqualFold(p.Protocol, "shadowsocks") && inboundcfg.IsSS2022(cfg.SSMethod) && strings.TrimSpace(cfg.SSPassword) == "" {
 		key, err := inboundcfg.GenerateSS2022Key(cfg.SSMethod)
 		if err != nil {

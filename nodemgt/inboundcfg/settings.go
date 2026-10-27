@@ -104,6 +104,23 @@ func DestHost(dest string) string {
 	return strings.TrimSpace(dest)
 }
 
+// ShareSNI is the name clients should send. Reality uses the dest / server
+// names, not a leftover TLS SNI from a previous protocol such as Hysteria2.
+func ShareSNI(s Settings) string {
+	if strings.EqualFold(strings.TrimSpace(s.Security), "reality") {
+		if name := firstCSV(s.RealityServerNames); name != "" {
+			return name
+		}
+		if host := DestHost(s.RealityDest); host != "" {
+			return host
+		}
+	}
+	if name := strings.TrimSpace(s.SNI); name != "" {
+		return name
+	}
+	return strings.TrimSpace(s.TLSDomain)
+}
+
 func NormalizeShareStrategy(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "listen":

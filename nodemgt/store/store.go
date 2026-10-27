@@ -67,6 +67,17 @@ func columnAttrs(tx *gorm.DB, value any) (map[string]any, error) {
 	return attrs, nil
 }
 
+func (s *Store) keepCreatedAt(model any, id string, created *time.Time) {
+	if created == nil || !created.IsZero() || strings.TrimSpace(id) == "" {
+		return
+	}
+	var t time.Time
+	if err := s.db.Model(model).Where("id = ?", id).Select("created_at").Scan(&t).Error; err != nil || t.IsZero() {
+		return
+	}
+	*created = t
+}
+
 func (s *Store) DB() *gorm.DB { return s.db }
 
 func (s *Store) Migrate() error {
@@ -79,7 +90,17 @@ func (s *Store) Migrate() error {
 	if err := s.backfillCertAutoRenew(); err != nil {
 		return err
 	}
+	if err := s.pruneOrphanGrants(); err != nil {
+		return err
+	}
 	return s.PurgeMissingNodes()
+}
+
+func (s *Store) pruneOrphanGrants() error {
+	if !s.db.Migrator().HasTable(&models.Grant{}) || !s.db.Migrator().HasTable(&models.Inbound{}) {
+		return nil
+	}
+	return s.db.Where("inbound_id NOT IN (?)", s.db.Model(&models.Inbound{}).Select("id")).Delete(&models.Grant{}).Error
 }
 
 func (s *Store) backfillCertAutoRenew() error {
@@ -213,14 +234,23 @@ func (s *Store) UpsertInbound(row *models.Inbound) error {
 }
 
 func (s *Store) DeleteInbound(id string) error {
-	res := s.db.Delete(&models.Inbound{}, "id = ?", id)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
+	id = strings.TrimSpace(id)
+	if id == "" {
 		return ErrNotFound
 	}
-	return nil
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var n int64
+		if err := tx.Model(&models.Inbound{}).Where("id = ?", id).Count(&n).Error; err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrNotFound
+		}
+		if err := tx.Where("inbound_id = ?", id).Delete(&models.Grant{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&models.Inbound{}, "id = ?", id).Error
+	})
 }
 
 func (s *Store) ListOutbounds(nodeUUID string) ([]models.Outbound, error) {
@@ -270,6 +300,7 @@ func (s *Store) UpsertOutbound(row *models.Outbound) error {
 	if row.Core == "" {
 		row.Core = models.CoreXray
 	}
+	s.keepCreatedAt(&models.Outbound{}, row.ID, &row.CreatedAt)
 	row.UpdatedAt = now()
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = row.UpdatedAt
@@ -339,6 +370,7 @@ func (s *Store) UpsertRoute(row *models.Route) error {
 	if row.ID == "" {
 		row.ID = newID()
 	}
+	s.keepCreatedAt(&models.Route{}, row.ID, &row.CreatedAt)
 	row.UpdatedAt = now()
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = row.UpdatedAt
@@ -402,6 +434,7 @@ func (s *Store) UpsertUser(row *models.NodeUser) error {
 	if row.DeviceLimit < 0 {
 		row.DeviceLimit = 0
 	}
+	s.keepCreatedAt(&models.NodeUser{}, row.ID, &row.CreatedAt)
 	row.UpdatedAt = now()
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = row.UpdatedAt

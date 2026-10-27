@@ -9,12 +9,20 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 
 本项目基于 [komari-monitor/komari](https://github.com/komari-monitor/komari) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时提供流量管理、成本中心、备份迁移、接入安全与适配电脑和手机的管理界面。
 
-**当前正式版：Lite-Plus [`0.0.8`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.8) · 配套 Agent [`0.0.1.5`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.1.5) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
+**当前正式版：Lite-Plus [`0.0.9`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.9) · 配套 Agent [`0.0.1.7`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.1.7) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
 
 [使用手册](https://nuomiiiii.github.io/Lite-document/) · [快速开始](#快速开始) · [功能概览](#功能概览) · [升级说明](#从旧版本升级) · [Agent](#agent-与远程管理) · [MCP 代理](#mcp-代理与-ai-授权) · [完整更新日志](https://github.com/nuomiiiii/Lite-Plus/releases)
 
 > [!WARNING]
 > Lite 只能部署在你拥有或已获得授权管理的设备上。请勿将其用于未经授权的访问、持久化、命令执行或其他滥用行为。管理员应启用 HTTPS 与双因素认证，并妥善保护 Agent Token 和备份文件。
+
+## 0.0.9
+
+- 修复入站改成 Reality 后，订阅和分享链接仍带上之前 TLS SNI 的 bug。
+- 防火墙规则端口可填 `*`，表示全部端口。
+- 修复改防火墙规则后，该条会跑到列表最后的 bug。
+- 修复关掉或保存出站、路由、用户后，该行会跑到列表最后的 bug。
+- 修复删除入站后，用了该入站的用户被误删的 bug。
 
 ## 0.0.8
 

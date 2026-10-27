@@ -211,13 +211,7 @@ func assembleWithAddrs(user models.NodeUser, inbounds []models.Inbound, creds []
 		}
 		flow := shareFlow(in, cfg, user, transport, security)
 		path, hostHeader, serviceName, mode := shareTransportFields(transport, cfg)
-		sni := cfg.SNI
-		if sni == "" && security == "reality" {
-			sni = inboundcfg.DestHost(cfg.RealityDest)
-			if sni == "" {
-				sni = cfg.RealityServerNames
-			}
-		}
+		sni := inboundcfg.ShareSNI(cfg)
 		sharePass := password
 		cipher := cfg.SSMethod
 		if strings.EqualFold(in.Protocol, "shadowsocks") {

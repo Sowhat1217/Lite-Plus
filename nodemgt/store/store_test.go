@@ -276,6 +276,86 @@ func TestInboundCRUD(t *testing.T) {
 	require.Len(t, list, 0)
 }
 
+func TestDeleteInboundRemovesGrantsKeepsUser(t *testing.T) {
+	st := testDB(t)
+	keep := &models.Inbound{NodeUUID: "n1", Name: "keep", Protocol: "vless", Port: 1}
+	drop := &models.Inbound{NodeUUID: "n1", Name: "drop", Protocol: "vless", Port: 2}
+	require.NoError(t, st.UpsertInbound(keep))
+	require.NoError(t, st.UpsertInbound(drop))
+	alice := &models.NodeUser{NodeUUID: "n1", Username: "alice"}
+	bob := &models.NodeUser{NodeUUID: "n1", Username: "bob"}
+	require.NoError(t, st.UpsertUser(alice))
+	require.NoError(t, st.UpsertUser(bob))
+	require.NoError(t, st.ReplaceGrants(alice.ID, []string{keep.ID, drop.ID}))
+	require.NoError(t, st.ReplaceGrants(bob.ID, []string{drop.ID}))
+	require.NoError(t, st.DeleteInbound(drop.ID))
+
+	users, err := st.ListUsers("n1")
+	require.NoError(t, err)
+	require.Len(t, users, 2)
+
+	gKeep, err := st.ListGrants(alice.ID)
+	require.NoError(t, err)
+	require.Len(t, gKeep, 1)
+	require.Equal(t, keep.ID, gKeep[0].InboundID)
+
+	gDrop, err := st.ListGrants(bob.ID)
+	require.NoError(t, err)
+	require.Len(t, gDrop, 0)
+
+	snap, err := st.NodeSnapshot("n1")
+	require.NoError(t, err)
+	snapUsers := snap["users"].([]snapshotUser)
+	byName := map[string]snapshotUser{}
+	for _, u := range snapUsers {
+		byName[u.Username] = u
+	}
+	require.Equal(t, []string{keep.ID}, byName["alice"].InboundIDs)
+	require.Empty(t, byName["bob"].InboundIDs)
+}
+
+func TestPruneOrphanGrantsOnMigrateKeepsUser(t *testing.T) {
+	st := testDB(t)
+	in := &models.Inbound{NodeUUID: "n1", Name: "in", Protocol: "vless", Port: 1}
+	require.NoError(t, st.UpsertInbound(in))
+	user := &models.NodeUser{NodeUUID: "n1", Username: "alice"}
+	require.NoError(t, st.UpsertUser(user))
+	require.NoError(t, st.ReplaceGrants(user.ID, []string{in.ID, "dead-inbound"}))
+	require.NoError(t, st.Migrate())
+	grants, err := st.ListGrants(user.ID)
+	require.NoError(t, err)
+	require.Len(t, grants, 1)
+	require.Equal(t, in.ID, grants[0].InboundID)
+	got, err := st.GetUser(user.ID)
+	require.NoError(t, err)
+	require.Equal(t, "alice", got.Username)
+}
+
+func TestDeleteNodeKeepsUserGrantedOnOtherNode(t *testing.T) {
+	st := testDB(t)
+	goneIn := &models.Inbound{NodeUUID: "gone", Name: "gone-in", Protocol: "vless", Port: 1}
+	keepIn := &models.Inbound{NodeUUID: "keep", Name: "keep-in", Protocol: "vless", Port: 2}
+	require.NoError(t, st.UpsertInbound(goneIn))
+	require.NoError(t, st.UpsertInbound(keepIn))
+	shared := &models.NodeUser{NodeUUID: "gone", Username: "alice"}
+	onlyGone := &models.NodeUser{NodeUUID: "gone", Username: "bob"}
+	require.NoError(t, st.UpsertUser(shared))
+	require.NoError(t, st.UpsertUser(onlyGone))
+	require.NoError(t, st.ReplaceGrants(shared.ID, []string{goneIn.ID, keepIn.ID}))
+	require.NoError(t, st.ReplaceGrants(onlyGone.ID, []string{goneIn.ID}))
+	require.NoError(t, st.DeleteNode("gone"))
+
+	_, err := st.GetUser(onlyGone.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+	got, err := st.GetUser(shared.ID)
+	require.NoError(t, err)
+	require.Equal(t, "keep", got.NodeUUID)
+	grants, err := st.ListGrants(shared.ID)
+	require.NoError(t, err)
+	require.Len(t, grants, 1)
+	require.Equal(t, keepIn.ID, grants[0].InboundID)
+}
+
 func TestDeleteNodeRemovesInboundOutboundUserAndCert(t *testing.T) {
 	st := testDB(t)
 	in := &models.Inbound{NodeUUID: "gone", Name: "in-a", Protocol: "vless", Port: 443}
@@ -769,6 +849,28 @@ func TestUserExtraLinksPersistDisabled(t *testing.T) {
 	require.Equal(t, id, rows[0].ID)
 }
 
+func TestReplaceGrantsDoesNotAffectOtherUsers(t *testing.T) {
+	st := testDB(t)
+	inA := &models.Inbound{NodeUUID: "n1", Name: "a", Protocol: "vless", Port: 1}
+	inB := &models.Inbound{NodeUUID: "n1", Name: "b", Protocol: "vless", Port: 2}
+	require.NoError(t, st.UpsertInbound(inA))
+	require.NoError(t, st.UpsertInbound(inB))
+	u1 := &models.NodeUser{NodeUUID: "n1", Username: "one"}
+	u2 := &models.NodeUser{NodeUUID: "n1", Username: "two"}
+	require.NoError(t, st.UpsertUser(u1))
+	require.NoError(t, st.UpsertUser(u2))
+	require.NoError(t, st.ReplaceGrants(u1.ID, []string{inA.ID}))
+	require.NoError(t, st.ReplaceGrants(u2.ID, []string{inB.ID}))
+	require.NoError(t, st.ReplaceGrants(u1.ID, []string{inA.ID, inB.ID}))
+	g2, err := st.ListGrants(u2.ID)
+	require.NoError(t, err)
+	require.Len(t, g2, 1)
+	require.Equal(t, inB.ID, g2[0].InboundID)
+	g1, err := st.ListGrants(u1.ID)
+	require.NoError(t, err)
+	require.Len(t, g1, 2)
+}
+
 func TestGetUserViewMatchesList(t *testing.T) {
 	st := testDB(t)
 	user := &models.NodeUser{NodeUUID: "n1", Username: "view-one"}
@@ -784,6 +886,72 @@ func TestGetUserViewMatchesList(t *testing.T) {
 	require.Equal(t, views[0].ID, got.ID)
 	require.Equal(t, views[0].InboundIDs, got.InboundIDs)
 	require.Equal(t, views[0].InboundNames, got.InboundNames)
+}
+
+func TestUpsertOutboundAndRouteKeepCreatedAtOrder(t *testing.T) {
+	st := testDB(t)
+	first := &models.Outbound{NodeUUID: "n1", Name: "exit-a", Protocol: "freedom", Enabled: true}
+	second := &models.Outbound{NodeUUID: "n1", Name: "exit-b", Protocol: "freedom", Enabled: true}
+	require.NoError(t, st.UpsertOutbound(first))
+	require.NoError(t, st.UpsertOutbound(second))
+	created := first.CreatedAt
+	first.Enabled = false
+	first.CreatedAt = time.Time{}
+	require.NoError(t, st.UpsertOutbound(first))
+	list, err := st.ListOutbounds("n1")
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	require.Equal(t, first.ID, list[0].ID)
+	require.False(t, list[0].Enabled)
+	require.Equal(t, created.Unix(), list[0].CreatedAt.Unix())
+	require.Equal(t, second.ID, list[1].ID)
+
+	r1 := &models.Route{NodeUUID: "n1", Name: "r1", Enabled: true, RuleJSON: `{"outbound_id":"direct"}`}
+	r2 := &models.Route{NodeUUID: "n1", Name: "r2", Enabled: true, RuleJSON: `{"outbound_id":"direct"}`}
+	require.NoError(t, st.UpsertRoute(r1))
+	require.NoError(t, st.UpsertRoute(r2))
+	routeCreated := r1.CreatedAt
+	r1.Enabled = false
+	r1.CreatedAt = time.Time{}
+	require.NoError(t, st.UpsertRoute(r1))
+	routes, err := st.ListRoutes("n1")
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(routes), 2)
+	require.Equal(t, r1.ID, routes[0].ID)
+	require.False(t, routes[0].Enabled)
+	require.Equal(t, routeCreated.Unix(), routes[0].CreatedAt.Unix())
+}
+
+func TestUpsertUserKeepsCreatedAt(t *testing.T) {
+	st := testDB(t)
+	user := &models.NodeUser{NodeUUID: "n1", Username: "alice"}
+	require.NoError(t, st.UpsertUser(user))
+	created := user.CreatedAt
+	user.Status = models.UserDisabled
+	user.CreatedAt = time.Time{}
+	require.NoError(t, st.UpsertUser(user))
+	got, err := st.GetUser(user.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.UserDisabled, got.Status)
+	require.Equal(t, created.Unix(), got.CreatedAt.Unix())
+}
+
+func TestUpsertRouteDoesNotMutateSiblings(t *testing.T) {
+	st := testDB(t)
+	keep := &models.Route{NodeUUID: "n1", Name: "keep-on", Enabled: true, RuleJSON: `{"inbound_id":"in-a","outbound_id":"direct"}`}
+	off := &models.Route{NodeUUID: "n1", Name: "turn-off", Enabled: true, RuleJSON: `{"inbound_id":"in-b","outbound_id":"direct"}`}
+	require.NoError(t, st.UpsertRoute(keep))
+	require.NoError(t, st.UpsertRoute(off))
+	off.Enabled = false
+	require.NoError(t, st.UpsertRoute(off))
+	savedOff, err := st.GetRoute(off.ID)
+	require.NoError(t, err)
+	require.False(t, savedOff.Enabled)
+	savedKeep, err := st.GetRoute(keep.ID)
+	require.NoError(t, err)
+	require.True(t, savedKeep.Enabled)
+	require.Equal(t, "keep-on", savedKeep.Name)
+	require.Contains(t, savedKeep.RuleJSON, "in-a")
 }
 
 func TestUpsertInboundKeepsExplicitDisabled(t *testing.T) {

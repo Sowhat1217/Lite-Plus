@@ -391,6 +391,38 @@ func TestAssembleNodeAddressFollowsStack(t *testing.T) {
 	}
 }
 
+func TestRealityShareUsesServerNamesNotLeftoverSNI(t *testing.T) {
+	in := models.Inbound{
+		ID: "n", NodeUUID: "node-1", Name: "US_01", Protocol: "vless",
+		Listen: "0.0.0.0", Port: 36325, Enabled: true, SortIndex: 1,
+		SettingsJSON: `{
+			"share_strategy":"other","public_host":"ppfla.8787837.xyz",
+			"security":"reality","transport":"tcp","flow":"xtls-rprx-vision",
+			"sni":"ppfla.8787837.xyz","tls_domain":"ppfla.8787837.xyz",
+			"reality_dest":"addons.mozilla.org:443","reality_server_names":"addons.mozilla.org",
+			"fingerprint":"edge","reality_public_key":"pk","reality_short_id":"7035f478","spider_x":"/"
+		}`,
+	}
+	nodes := Assemble(models.NodeUser{Username: "alice"}, []models.Inbound{in}, []models.Credential{{UUID: "u", Enabled: true}}, map[string]bool{"n": true}, nil)
+	if len(nodes) != 1 {
+		t.Fatalf("nodes: %+v", nodes)
+	}
+	if nodes[0].SNI != "addons.mozilla.org" {
+		t.Fatalf("share sni %q", nodes[0].SNI)
+	}
+	raw, _, err := Render("v2ray", nodes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := DecodeShareLinks(raw)[0]
+	if !strings.Contains(link, "sni=addons.mozilla.org") {
+		t.Fatalf("share link kept leftover sni: %s", link)
+	}
+	if strings.Contains(link, "sni=ppfla.8787837.xyz") {
+		t.Fatalf("share link leaked leftover sni: %s", link)
+	}
+}
+
 func TestTCPRealityShareOmitsOtherTransportDefaults(t *testing.T) {
 	in := models.Inbound{
 		ID: "n", NodeUUID: "node-1", Name: "US_02", Protocol: "vless",

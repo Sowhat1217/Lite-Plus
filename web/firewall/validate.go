@@ -248,7 +248,10 @@ func normalizeStack(stack string) string {
 
 func normalizePort(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "*" || strings.EqualFold(raw, "any") {
+	if raw == "*" || strings.EqualFold(raw, "any") {
+		return "*", nil
+	}
+	if raw == "" {
 		return "", fmt.Errorf("%w: port", ErrInvalidRule)
 	}
 	if strings.Contains(raw, ",") {

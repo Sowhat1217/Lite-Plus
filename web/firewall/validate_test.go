@@ -22,6 +22,31 @@ func TestNormalizeRuleRejectsDualStack(t *testing.T) {
 	}
 }
 
+func TestNormalizeRuleAllPorts(t *testing.T) {
+	rule, err := NormalizeRule(v2.FirewallRule{
+		Action:   "allow",
+		Protocol: "tcp",
+		Port:     "*",
+		Source:   "10.240.3.4",
+		Stack:    "v4",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rule.Port != "*" || rule.Source != "10.240.3.4/32" {
+		t.Fatalf("%+v", rule)
+	}
+	any, err := NormalizeRule(v2.FirewallRule{
+		Action:   "allow",
+		Protocol: "udp",
+		Port:     "any",
+		Stack:    "v4",
+	})
+	if err != nil || any.Port != "*" {
+		t.Fatalf("%+v %v", any, err)
+	}
+}
+
 func TestNormalizeRuleSeparatesSourceByStack(t *testing.T) {
 	_, err := NormalizeRule(v2.FirewallRule{
 		Action:   "allow",
