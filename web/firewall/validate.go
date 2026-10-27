@@ -22,10 +22,11 @@ const (
 )
 
 var (
-	ErrTooManyRules     = errors.New("firewall rule limit exceeded")
-	ErrInvalidRule      = errors.New("invalid firewall rule")
-	ErrInvalidStack     = errors.New("firewall stack must be v4 or v6")
-	ErrStackSource      = errors.New("source CIDR does not match the rule stack")
+	ErrTooManyRules        = errors.New("firewall rule limit exceeded")
+	ErrInvalidRule         = errors.New("invalid firewall rule")
+	ErrDuplicateRule       = errors.New("firewall rule already exists")
+	ErrInvalidStack        = errors.New("firewall stack must be v4 or v6")
+	ErrStackSource         = errors.New("source CIDR does not match the rule stack")
 	ErrDefaultDenyConflict = errors.New("default deny conflicts with ufw or firewalld")
 	ErrDefaultDenyNeedScan = errors.New("请先扫描主机规则后再打开入站默认拒绝")
 )
@@ -49,6 +50,14 @@ func NormalizeIntent(intent v2.FirewallIntent) (v2.FirewallIntent, error) {
 			rules = append(rules, normalized)
 		}
 	}
+	ident := make(map[string]struct{}, len(rules))
+	for _, rule := range rules {
+		key := RuleIdentityKey(rule)
+		if _, ok := ident[key]; ok {
+			return v2.FirewallIntent{}, ErrDuplicateRule
+		}
+		ident[key] = struct{}{}
+	}
 	if len(rules) > MaxRules {
 		return v2.FirewallIntent{}, ErrTooManyRules
 	}
@@ -60,6 +69,29 @@ func NormalizeIntent(intent v2.FirewallIntent) (v2.FirewallIntent, error) {
 	intent.OmitKeep = NormalizeOmitKeep(intent.OmitKeep)
 	intent.Rules = rules
 	return intent, nil
+}
+
+func RuleIdentityKey(rule v2.FirewallRule) string {
+	return strings.ToLower(strings.TrimSpace(rule.Protocol)) + "\x00" +
+		strings.TrimSpace(rule.Port) + "\x00" +
+		strings.TrimSpace(rule.Source) + "\x00" +
+		strings.TrimSpace(rule.Stack)
+}
+
+func UpsertRuleByIdentity(rules []v2.FirewallRule, rule v2.FirewallRule) []v2.FirewallRule {
+	key := RuleIdentityKey(rule)
+	for i, existing := range rules {
+		if RuleIdentityKey(existing) != key {
+			continue
+		}
+		rule.ID = existing.ID
+		if existing.Priority > 0 {
+			rule.Priority = existing.Priority
+		}
+		rules[i] = rule
+		return rules
+	}
+	return append(rules, rule)
 }
 
 func ExpandProtocols(rule v2.FirewallRule) []v2.FirewallRule {

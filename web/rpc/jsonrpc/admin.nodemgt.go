@@ -284,6 +284,19 @@ func fillRealityInboundDefaults(p *inboundUpsertParams) error {
 	return nil
 }
 
+func resolveInboundSortIndex(id string, requested *int, existing *models.Inbound, next func() int) int {
+	if requested != nil {
+		return *requested
+	}
+	if existing != nil {
+		return existing.SortIndex
+	}
+	if strings.TrimSpace(id) == "" {
+		return next()
+	}
+	return 0
+}
+
 func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
 	var p inboundUpsertParams
 	if err := req.BindParams(&p); err != nil {
@@ -402,16 +415,9 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 			existing = row
 		}
 	}
-	sortIndex := 0
-	if p.SortIndex != nil {
-		sortIndex = *p.SortIndex
-	}
-	if existing != nil && p.SortIndex == nil {
-		sortIndex = existing.SortIndex
-	}
-	if p.ID == "" && sortIndex <= 0 {
-		sortIndex = st.NextInboundSortIndex(p.NodeUUID)
-	}
+	sortIndex := resolveInboundSortIndex(p.ID, p.SortIndex, existing, func() int {
+		return st.NextInboundSortIndex(p.NodeUUID)
+	})
 	cfg := inboundcfg.Settings{
 		Stack:              p.Stack,
 		PublicHost:         publicHost,

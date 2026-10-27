@@ -9,12 +9,18 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 
 本项目基于 [komari-monitor/komari](https://github.com/komari-monitor/komari) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时提供流量管理、成本中心、备份迁移、接入安全与适配电脑和手机的管理界面。
 
-**当前正式版：Lite-Plus [`0.0.9`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.9) · 配套 Agent [`0.0.1.7`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.1.7) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
+**当前正式版：Lite-Plus [`0.1.0`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.1.0) · 配套 Agent [`0.0.2.1`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.2.1) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
 
 [使用手册](https://nuomiiiii.github.io/Lite-document/) · [快速开始](#快速开始) · [功能概览](#功能概览) · [升级说明](#从旧版本升级) · [Agent](#agent-与远程管理) · [MCP 代理](#mcp-代理与-ai-授权) · [完整更新日志](https://github.com/nuomiiiii/Lite-Plus/releases)
 
 > [!WARNING]
 > Lite 只能部署在你拥有或已获得授权管理的设备上。请勿将其用于未经授权的访问、持久化、命令执行或其他滥用行为。管理员应启用 HTTPS 与双因素认证，并妥善保护 Agent Token 和备份文件。
+
+## 0.1.0
+
+- 修复入站勾选「同时放行该端口」后，防火墙里会出现两条相同放行的 bug。需搭配 Lite-Plus-agent `0.0.2.1`。
+- 防火墙新建规则时，协议、端口、来源都相同则禁止添加并提示。来源不同（例如限定 IP 与任意）可以并存。
+- 修复新建入站时订阅排序填 0 会被改成自动序号的 bug。0 排最前；留空才自动排到最后。
 
 ## 0.0.9
 

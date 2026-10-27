@@ -15,29 +15,10 @@ func ListenHoles(_ string, intent v2.FirewallIntent) []v2.FirewallHole {
 	if !intent.DefaultDeny4 && !intent.DefaultDeny6 {
 		return nil
 	}
-	return inboundHolesFromRules(intent)
-}
-
-func inboundHolesFromRules(intent v2.FirewallIntent) []v2.FirewallHole {
-	holes := make([]v2.FirewallHole, 0)
-	for _, rule := range intent.Rules {
-		if rule.Origin != v2.FirewallOriginInbound || !rule.Enabled {
-			continue
-		}
-		if rule.Stack == v2.FirewallStackV4 && !intent.DefaultDeny4 {
-			continue
-		}
-		if rule.Stack == v2.FirewallStackV6 && !intent.DefaultDeny6 {
-			continue
-		}
-		holes = append(holes, v2.FirewallHole{
-			Protocol: rule.Protocol,
-			Port:     rule.Port,
-			Stack:    rule.Stack,
-			Comment:  rule.Comment,
-		})
-	}
-	return holes
+	// Inbound-linked allows are already in intent.Rules. A second listen hole
+	// for the same port made Plus write two identical ACCEPT rules when
+	// 同时放行该端口 is checked.
+	return nil
 }
 
 type InboundFirewallOp int
@@ -142,8 +123,11 @@ func replaceInboundRules(nodeUUID string, inbound nodemgtmodels.Inbound, cfg inb
 			if err != nil {
 				return err
 			}
-			intent.Rules = append(intent.Rules, rule)
-			priority++
+			before := len(intent.Rules)
+			intent.Rules = UpsertRuleByIdentity(intent.Rules, rule)
+			if len(intent.Rules) > before {
+				priority++
+			}
 		}
 	} else if !had {
 		return nil

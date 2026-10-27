@@ -209,6 +209,38 @@ func TestRewriteKeepSSH(t *testing.T) {
 	}
 }
 
+func TestNormalizeIntentRejectsDuplicateIdentity(t *testing.T) {
+	_, err := NormalizeIntent(v2.FirewallIntent{
+		Rules: []v2.FirewallRule{
+			{Action: "allow", Protocol: "tcp", Port: "32688", Stack: "v4"},
+			{Action: "deny", Protocol: "tcp", Port: "32688", Source: "*", Stack: "v4"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), ErrDuplicateRule.Error()) {
+		t.Fatalf("same protocol/port/source must be rejected: %v", err)
+	}
+	got, err := NormalizeIntent(v2.FirewallIntent{
+		Rules: []v2.FirewallRule{
+			{Action: "allow", Protocol: "tcp", Port: "80", Stack: "v4"},
+			{Action: "allow", Protocol: "udp", Port: "80", Stack: "v4"},
+			{Action: "allow", Protocol: "tcp", Port: "80", Source: "10.0.0.1", Stack: "v4"},
+			{Action: "allow", Protocol: "tcp", Port: "80", Stack: "v6"},
+		},
+	})
+	if err != nil || len(got.Rules) != 4 {
+		t.Fatalf("different protocol, source, or stack must stay: %+v %v", got.Rules, err)
+	}
+}
+
+func TestUpsertRuleByIdentityReusesSamePort(t *testing.T) {
+	existing := v2.FirewallRule{ID: "web-1", Action: "allow", Protocol: "tcp", Port: "32688", Stack: "v4", Priority: 103, Origin: v2.FirewallOriginWeb}
+	inbound := v2.FirewallRule{ID: "in-1", Action: "allow", Protocol: "tcp", Port: "32688", Stack: "v4", Priority: 104, Origin: v2.FirewallOriginInbound, InboundID: "us02"}
+	got := UpsertRuleByIdentity([]v2.FirewallRule{existing}, inbound)
+	if len(got) != 1 || got[0].ID != "web-1" || got[0].Priority != 103 || got[0].InboundID != "us02" {
+		t.Fatalf("same identity must reuse the row: %+v", got)
+	}
+}
+
 func TestNormalizeIntentExpandsBothProtocol(t *testing.T) {
 	got, err := NormalizeIntent(v2.FirewallIntent{
 		Rules: []v2.FirewallRule{
@@ -298,7 +330,7 @@ func TestAttachKeepRules(t *testing.T) {
 	}
 }
 
-func TestListenHolesUsesInboundOriginOnly(t *testing.T) {
+func TestListenHolesSkipsInboundAllows(t *testing.T) {
 	intent := v2.FirewallIntent{
 		DefaultDeny4: true,
 		Rules: []v2.FirewallRule{
@@ -308,9 +340,8 @@ func TestListenHolesUsesInboundOriginOnly(t *testing.T) {
 			{Origin: v2.FirewallOriginInbound, Enabled: true, Protocol: "tcp", Port: "443", Stack: v2.FirewallStackV6},
 		},
 	}
-	holes := ListenHoles("unused", intent)
-	if len(holes) != 1 || holes[0].Port != "443" || holes[0].Stack != v2.FirewallStackV4 {
-		t.Fatalf("%+v", holes)
+	if holes := ListenHoles("unused", intent); len(holes) != 0 {
+		t.Fatalf("inbound allow must not also become a listen hole: %+v", holes)
 	}
 }
 
