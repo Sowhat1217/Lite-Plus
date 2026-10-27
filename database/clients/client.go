@@ -19,6 +19,7 @@ import (
 	"github.com/nuomiiiii/lite/database/notificationdefaults"
 	"github.com/nuomiiiii/lite/database/tasks"
 	"github.com/nuomiiiii/lite/database/trafficledger"
+	nodemgtstore "github.com/nuomiiiii/lite/nodemgt/store"
 	"github.com/nuomiiiii/lite/pkg/config"
 	"github.com/nuomiiiii/lite/pkg/expiry"
 	"github.com/nuomiiiii/lite/pkg/trafficreset"
@@ -72,6 +73,9 @@ func deleteClient(db *gorm.DB, clientUuid string) (bool, error) {
 		if err := metricstore.EnqueueEntityCleanup(tx, clientUuid); err != nil {
 			return fmt.Errorf("queue client metric cleanup: %w", err)
 		}
+		if err := nodemgtstore.New(tx).DeleteNode(clientUuid); err != nil {
+			return fmt.Errorf("delete nodemgt node: %w", err)
+		}
 		if tx.Migrator().HasTable("return_route_tasks") {
 			var routeTaskIDs []uint
 			if err := tx.Model(&models.ReturnRouteTask{}).Where("client = ?", clientUuid).Pluck("id", &routeTaskIDs).Error; err != nil {
@@ -106,6 +110,7 @@ func deleteClient(db *gorm.DB, clientUuid string) (bool, error) {
 			"ping loss notifications":         &models.PingLossNotification{},
 			"task results":                    &models.TaskResult{},
 			"deployment profile":              &models.ClientDeploymentProfile{},
+			"firewall intent":                 &models.ClientFirewallIntent{},
 		} {
 			if !tx.Migrator().HasTable(model) {
 				continue
@@ -1287,6 +1292,43 @@ func SetMCPCapability(uuid string, full bool, version int) {
 		"mcp_full_version": version,
 	}).Error; err != nil {
 		logger.Errorf("mcp", "failed to record MCP capability for %s: %v", uuid, err)
+		return
+	}
+	invalidateClientListCache()
+}
+
+var (
+	firewallCapabilityMu   sync.Mutex
+	firewallCapabilitySeen = map[string][2]int{}
+)
+
+func SetFirewallCapability(uuid string, supported bool, version int) {
+	uuid = strings.TrimSpace(uuid)
+	if uuid == "" {
+		return
+	}
+	if !supported {
+		version = 0
+	}
+	flag := 0
+	if supported {
+		flag = 1
+	}
+	next := [2]int{flag, version}
+	firewallCapabilityMu.Lock()
+	prev, exists := firewallCapabilitySeen[uuid]
+	if exists && prev == next {
+		firewallCapabilityMu.Unlock()
+		return
+	}
+	firewallCapabilitySeen[uuid] = next
+	firewallCapabilityMu.Unlock()
+
+	if err := dbcore.GetDBInstance().Model(&models.Client{}).Where("uuid = ?", uuid).Updates(map[string]any{
+		"firewall":         supported,
+		"firewall_version": version,
+	}).Error; err != nil {
+		logger.Errorf("firewall", "failed to record firewall capability for %s: %v", uuid, err)
 		return
 	}
 	invalidateClientListCache()

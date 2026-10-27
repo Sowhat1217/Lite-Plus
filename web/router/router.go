@@ -179,6 +179,10 @@ func registerAdminRoutes(r *gin.Engine) {
 		task.GET("/:task_id/result/:uuid", jsonRpc.Bind("admin:getSpecificTaskResult", jsonRpc.WithPath("task_id", "uuid")))
 		task.GET("/client/:uuid", jsonRpc.Bind("admin:getTasksByClientId", jsonRpc.WithPath("uuid")))
 	}
+	g.GET("/firewall/:uuid", jsonRpc.Bind("admin:getFirewall", jsonRpc.WithPath("uuid")))
+	g.PUT("/firewall/:uuid", jsonRpc.Bind("admin:saveFirewall", jsonRpc.WithPath("uuid")))
+	g.POST("/firewall/:uuid/snapshot", jsonRpc.Bind("admin:snapshotFirewall", jsonRpc.WithPath("uuid")))
+	g.POST("/firewall/:uuid/adopt", jsonRpc.Bind("admin:adoptFirewall", jsonRpc.WithPath("uuid")))
 	g.GET("/scheduled-exec", jsonRpc.Bind("admin:listScheduledExec"))
 	g.POST("/scheduled-exec", jsonRpc.Bind("admin:createScheduledExec"))
 	g.POST("/scheduled-exec/order", jsonRpc.Bind("admin:reorderScheduledExec"))

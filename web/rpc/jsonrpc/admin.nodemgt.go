@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nuomiiiii/lite/database/accounts"
+	"github.com/nuomiiiii/lite/database/clients"
 	"github.com/nuomiiiii/lite/database/dbcore"
 	"github.com/nuomiiiii/lite/nodemgt/cert"
 	"github.com/nuomiiiii/lite/nodemgt/control"
@@ -23,6 +24,7 @@ import (
 	"github.com/nuomiiiii/lite/nodemgt/subtpl"
 	"github.com/nuomiiiii/lite/pkg/rpc"
 	logger "github.com/nuomiiiii/lite/utils/log"
+	"github.com/nuomiiiii/lite/web/firewall"
 	"gorm.io/gorm"
 )
 
@@ -71,6 +73,8 @@ func init() {
 	reg("nodemgt.diag.status", nodemgtDiagStatus, "nodemgt diagnostics")
 	reg("nodemgt.settings.get", nodemgtSettingsGet, "Get nodemgt certificate issuer settings")
 	reg("nodemgt.settings.set", nodemgtSettingsSet, "Save nodemgt certificate issuer settings")
+	reg("nodemgt.node.list", nodemgtNodeList, "List node dial-stack profiles")
+	reg("nodemgt.node.upsert", nodemgtNodeUpsert, "Save a node's outbound IP stack")
 }
 
 func nodemgtST() *store.Store { return store.New(dbcore.GetDBInstance()) }
@@ -123,6 +127,9 @@ func nodemgtPushNodes(_ *store.Store, nodeUUIDs ...string) {
 			continue
 		}
 		if _, ok := seen[id]; ok {
+			continue
+		}
+		if _, err := clients.GetClientByUUID(id); err != nil {
 			continue
 		}
 		seen[id] = struct{}{}
@@ -249,6 +256,9 @@ type inboundUpsertParams struct {
 	SortIndex          *int   `json:"sort_index"`
 	ExcludeFromSub     *bool  `json:"exclude_from_sub"`
 	ShareStrategy      string `json:"share_strategy"`
+	FirewallAllow      *bool  `json:"firewall_allow"`
+	Grant              string `json:"grant"`
+	PageID             string `json:"page_id"`
 }
 
 const defaultRealityDest = "addons.mozilla.org:443"
@@ -386,14 +396,18 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 		publicHost = strings.TrimSpace(p.PublicHost)
 	}
 	st := nodemgtST()
+	var existing *models.Inbound
+	if strings.TrimSpace(p.ID) != "" {
+		if row, err := st.GetInbound(p.ID); err == nil {
+			existing = row
+		}
+	}
 	sortIndex := 0
 	if p.SortIndex != nil {
 		sortIndex = *p.SortIndex
 	}
-	if p.ID != "" && p.SortIndex == nil {
-		if existing, err := st.GetInbound(p.ID); err == nil && existing != nil {
-			sortIndex = existing.SortIndex
-		}
+	if existing != nil && p.SortIndex == nil {
+		sortIndex = existing.SortIndex
 	}
 	if p.ID == "" && sortIndex <= 0 {
 		sortIndex = st.NextInboundSortIndex(p.NodeUUID)
@@ -469,12 +483,51 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 		StreamJSON:   inboundcfg.StreamJSON(cfg, p.Protocol),
 		Enabled:      enabled,
 	}
+	wasLinked := existing != nil && firewall.InboundLinked(existing.NodeUUID, existing.ID)
+	op := firewall.PlannedInboundFirewallOp(wasLinked, p.FirewallAllow, existing, row, cfg)
+	var expires time.Time
+	var grantEpoch uint64
+	var grantMeta *rpc.ContextMeta
+	if op != firewall.InboundFirewallNone {
+		_, clientErr := clients.GetClientByUUID(row.NodeUUID)
+		nodePresent := clientErr == nil
+		if op == firewall.InboundFirewallLink && enabled && nodePresent {
+			if err := firewall.EnsureApplyAllowed(row.NodeUUID); err != nil {
+				return nil, rpc.MakeError(rpc.PermissionDenied, err.Error(), nil)
+			}
+		}
+		if nodePresent {
+			meta, rpcErr := scheduledExecActor(ctx)
+			if rpcErr != nil {
+				return nil, rpcErr
+			}
+			grantMeta = meta
+			expires, grantEpoch, rpcErr = consumeScheduledExecGrant(meta, p.Grant, p.PageID)
+			if rpcErr != nil {
+				return nil, rpcErr
+			}
+		}
+	}
 	if err := st.UpsertInbound(&row); err != nil {
 		return nil, nodemgtErr(err)
 	}
 	_ = st.Audit(nodemgtActor(ctx), "nodemgt.inbound.upsert", row.ID, row.Name)
+	switch op {
+	case firewall.InboundFirewallLink:
+		if err := firewall.LinkInbound(row.NodeUUID, row); err != nil {
+			return nil, nodemgtErr(err)
+		}
+	case firewall.InboundFirewallUnlink:
+		if err := firewall.UnlinkInbound(row.NodeUUID, row.ID); err != nil {
+			return nil, nodemgtErr(err)
+		}
+	}
 	nodemgtPush(st, row.NodeUUID)
-	return inboundView(row), nil
+	view := inboundView(row)
+	if grantMeta != nil {
+		return grantPayload(grantMeta.Principal.UserUUID, grantMeta.SessionToken, p.PageID, expires, grantEpoch, view), nil
+	}
+	return view, nil
 }
 
 func inboundView(row models.Inbound) map[string]any {
@@ -526,12 +579,15 @@ func inboundView(row models.Inbound) map[string]any {
 		"route_only":           inboundcfg.EffectiveRouteOnly(s),
 		"exclude_from_sub":     s.ExcludeFromSub,
 		"share_strategy":       s.ShareStrategy,
+		"firewall_linked":      firewall.InboundLinked(row.NodeUUID, row.ID),
 	}
 }
 
 func nodemgtInboundDelete(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
 	var p struct {
-		ID string `json:"id"`
+		ID     string `json:"id"`
+		Grant  string `json:"grant"`
+		PageID string `json:"page_id"`
 	}
 	_ = req.BindParams(&p)
 	st := nodemgtST()
@@ -539,12 +595,39 @@ func nodemgtInboundDelete(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 	if err != nil {
 		return nil, nodemgtErr(err)
 	}
+	var expires time.Time
+	var grantEpoch uint64
+	var grantMeta *rpc.ContextMeta
+	if firewall.InboundLinked(row.NodeUUID, row.ID) {
+		if _, err := clients.GetClientByUUID(row.NodeUUID); err != nil {
+			if err := firewall.UnlinkInbound(row.NodeUUID, row.ID); err != nil {
+				return nil, nodemgtErr(err)
+			}
+		} else {
+			meta, rpcErr := scheduledExecActor(ctx)
+			if rpcErr != nil {
+				return nil, rpcErr
+			}
+			grantMeta = meta
+			expires, grantEpoch, rpcErr = consumeScheduledExecGrant(meta, p.Grant, p.PageID)
+			if rpcErr != nil {
+				return nil, rpcErr
+			}
+			if err := firewall.UnlinkInbound(row.NodeUUID, row.ID); err != nil {
+				return nil, nodemgtErr(err)
+			}
+		}
+	}
 	if err := st.DeleteInbound(p.ID); err != nil {
 		return nil, nodemgtErr(err)
 	}
 	_ = st.Audit(nodemgtActor(ctx), "nodemgt.inbound.delete", p.ID, row.Name)
 	nodemgtPush(st, row.NodeUUID)
-	return map[string]any{"ok": true}, nil
+	out := map[string]any{"ok": true}
+	if grantMeta != nil {
+		return grantPayload(grantMeta.Principal.UserUUID, grantMeta.SessionToken, p.PageID, expires, grantEpoch, out), nil
+	}
+	return out, nil
 }
 
 func nodemgtInboundReorder(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
@@ -1911,4 +1994,36 @@ func nodemgtSettingsSet(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc
 	}
 	_ = st.Audit(nodemgtActor(ctx), "nodemgt.settings.set", "nodemgt", "")
 	return nodemgtSettingsGet(ctx, req)
+}
+
+func nodemgtNodeList(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	rows, err := nodemgtST().ListNodeProfiles()
+	if err != nil {
+		return nil, nodemgtErr(err)
+	}
+	return rows, nil
+}
+
+func nodemgtNodeUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var p struct {
+		NodeUUID  string `json:"node_uuid"`
+		DialStack string `json:"dial_stack"`
+	}
+	if err := req.BindParams(&p); err != nil {
+		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
+	}
+	if strings.TrimSpace(p.NodeUUID) == "" {
+		return nil, rpc.MakeError(rpc.InvalidParams, "node_uuid required", nil)
+	}
+	if _, err := clients.GetClientByUUID(p.NodeUUID); err != nil {
+		return nil, nodemgtErr(err)
+	}
+	st := nodemgtST()
+	row, err := st.UpsertNodeProfile(p.NodeUUID, p.DialStack)
+	if err != nil {
+		return nil, nodemgtErr(err)
+	}
+	_ = st.Audit(nodemgtActor(ctx), "nodemgt.node.upsert", p.NodeUUID, row.DialStack)
+	nodemgtPush(st, p.NodeUUID)
+	return row, nil
 }

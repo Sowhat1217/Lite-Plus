@@ -30,9 +30,15 @@ const (
 	MethodNodemgtControlResult = "nodemgt.controlResult"
 	MethodNodemgtUsage         = "nodemgt.usage"
 	MethodNodemgtPresence      = "nodemgt.presence"
+	MethodAgentFirewallSnapshot = "agent.firewall.snapshot"
+	MethodAgentFirewallApply    = "agent.firewall.apply"
+	MethodAgentFirewallAdopt    = "agent.firewall.adopt"
+	MethodAgentFirewallResult   = "agent.firewall.result"
 
-	CapabilityMCPFull = "mcp_full"
-	MCPFullVersion    = 1
+	CapabilityMCPFull    = "mcp_full"
+	MCPFullVersion       = 1
+	CapabilityFirewall   = "firewall"
+	FirewallVersion      = 1
 )
 
 type Request struct {

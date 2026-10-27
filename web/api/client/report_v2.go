@@ -24,6 +24,7 @@ import (
 	agent_runtime "github.com/nuomiiiii/lite/web/agent"
 	"github.com/nuomiiiii/lite/web/api"
 	"github.com/nuomiiiii/lite/web/connection"
+	"github.com/nuomiiiii/lite/web/firewall"
 )
 
 func readMaybeCompressedBody(r *http.Request) ([]byte, error) {
@@ -187,6 +188,13 @@ func handleV2RPC(uuid string, req v2.Request, allowWait bool) v2.Response {
 			return v2.Error(req.ID, -32000, "failed to record nodemgt presence", err.Error())
 		}
 		return v2.Success(req.ID, gin.H{"status": "success"})
+	case v2.MethodAgentFirewallResult:
+		var params v2.FirewallResultParams
+		if err := bindV2Params(req.Params, &params); err != nil {
+			return v2.Error(req.ID, -32602, "invalid firewall result", err.Error())
+		}
+		firewall.CompleteResult(uuid, params)
+		return v2.Success(req.ID, gin.H{"status": "success"})
 	case v2.MethodAgentPull:
 		var params v2.PullParams
 		if err := bindV2Params(req.Params, &params); err != nil {
@@ -196,6 +204,7 @@ func handleV2RPC(uuid string, req v2.Request, allowWait bool) v2.Response {
 		refreshPostPresence(uuid)
 		go func() {
 			_ = control.PushPending(store.New(dbcore.GetDBInstance()), uuid)
+			firewall.PushPending(uuid)
 		}()
 		timeout := 0 * time.Second
 		if allowWait {

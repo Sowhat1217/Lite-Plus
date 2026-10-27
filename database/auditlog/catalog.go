@@ -147,6 +147,8 @@ var phrases = map[string][4]string{
 	"audit.remote_request":             {"请求连接服务器「{{name}}」的远程会话", "Requested a remote session for {{name}}", "サーバー「{{name}}」へのリモートセッションを要求しました", "已發起伺服器「{{name}}」的遠端連線請求"},
 	"audit.renewal_fail":               {"自动续费服务器「{{name}}」失败：{{error}}", "Failed to auto-renew {{name}}: {{error}}", "サーバー「{{name}}」の自動更新に失敗しました：{{error}}", "無法自動續訂伺服器「{{name}}」，錯誤訊息：{{error}}"},
 	"audit.renewal_ok":                 {"已自动续费服务器「{{name}}」，到期日 {{until}}", "Auto-renewed {{name}} until {{until}}", "サーバー「{{name}}」を {{until}} まで自動更新しました", "已自動續訂伺服器「{{name}}」，有效期限延展至：{{until}}"},
+	"audit.firewall_adopt":             {"从主机导入了服务器「{{name}}」的防火墙规则", "Imported host firewall rules for {{name}}", "サーバー「{{name}}」のファイアウォール規則を取り込みました", "已從主機匯入伺服器「{{name}}」的防火牆規則"},
+	"audit.firewall_save":              {"保存了服务器「{{name}}」的防火墙规则", "Saved firewall rules for {{name}}", "サーバー「{{name}}」のファイアウォール規則を保存しました", "已儲存伺服器「{{name}}」的防火牆規則"},
 	"audit.scheduled_exec_delete":      {"删除了定时任务「{{name}}」", "Deleted the scheduled task \"{{name}}\"", "定時タスク「{{name}}」を削除しました", "已移除排程作業「{{name}}」"},
 	"audit.scheduled_exec_run":         {"执行了定时任务「{{name}}」，任务 {{id}}", "Ran the scheduled task \"{{name}}\", task {{id}}", "定時タスク「{{name}}」を実行しました。タスク {{id}}", "已執行排程作業「{{name}}」，編號：{{id}}"},
 	"audit.scheduled_exec_save":        {"保存了定时任务「{{name}}」", "Saved the scheduled task \"{{name}}\"", "定時タスク「{{name}}」を保存しました", "已更新排程作業「{{name}}」"},

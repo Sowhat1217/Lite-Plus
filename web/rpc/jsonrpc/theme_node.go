@@ -22,6 +22,8 @@ var themeNodeForbiddenJSONKeys = []string{
 	"remote_control_protected",
 	"mcp_full",
 	"mcp_full_version",
+	"firewall",
+	"firewall_version",
 	"traffic_reset_allowance",
 	"traffic_reset_cycle",
 	"created_at",

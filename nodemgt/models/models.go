@@ -312,6 +312,14 @@ type Setting struct {
 
 func (Setting) TableName() string { return "nodemgt_settings" }
 
+type NodeProfile struct {
+	NodeUUID  string    `json:"node_uuid" gorm:"type:varchar(36);primaryKey"`
+	DialStack string    `json:"dial_stack" gorm:"type:varchar(32);not null;default:'dual'"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (NodeProfile) TableName() string { return "nodemgt_node_profiles" }
+
 type UserIP struct {
 	ID        string    `json:"id" gorm:"type:varchar(36);primaryKey"`
 	UserID    string    `json:"user_id" gorm:"type:varchar(36);uniqueIndex:uid_ip_node;not null"`
@@ -344,6 +352,7 @@ func All() []any {
 		&ControlCommand{},
 		&AuditEvent{},
 		&Setting{},
+		&NodeProfile{},
 		&UserIP{},
 	}
 }

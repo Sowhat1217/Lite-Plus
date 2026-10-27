@@ -16,6 +16,7 @@ import (
 	"github.com/nuomiiiii/lite/utils/notifier"
 	agent_runtime "github.com/nuomiiiii/lite/web/agent"
 	remote_api "github.com/nuomiiiii/lite/web/api/remote"
+	"github.com/nuomiiiii/lite/web/firewall"
 )
 
 // admin.client.go
@@ -174,6 +175,7 @@ func adminRemoveClient(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.
 	}
 	clientName := clients.DisplayName(params.UUID)
 	metricstore.BlockEntityWrites(params.UUID)
+	firewall.ClearNode(params.UUID)
 	remote_api.CloseClientSessions(params.UUID)
 	agent_runtime.DeleteConnectedClients(params.UUID)
 	notifier.ForgetClient(params.UUID)

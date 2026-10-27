@@ -9,12 +9,23 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 
 本项目基于 [komari-monitor/komari](https://github.com/komari-monitor/komari) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时提供流量管理、成本中心、备份迁移、接入安全与适配电脑和手机的管理界面。
 
-**当前正式版：Lite-Plus [`0.0.7`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.7) · 配套 Agent [`0.0.1.4`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.1.4) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
+**当前正式版：Lite-Plus [`0.0.8`](https://github.com/nuomiiiii/Lite-Plus/releases/tag/0.0.8) · 配套 Agent [`0.0.1.5`](https://github.com/nuomiiiii/Lite-Plus-agent/releases/tag/0.0.1.5) · 默认主题 [`1.2.9`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.2.9)**
 
 [使用手册](https://nuomiiiii.github.io/Lite-document/) · [快速开始](#快速开始) · [功能概览](#功能概览) · [升级说明](#从旧版本升级) · [Agent](#agent-与远程管理) · [MCP 代理](#mcp-代理与-ai-授权) · [完整更新日志](https://github.com/nuomiiiii/Lite-Plus/releases)
 
 > [!WARNING]
 > Lite 只能部署在你拥有或已获得授权管理的设备上。请勿将其用于未经授权的访问、持久化、命令执行或其他滥用行为。管理员应启用 HTTPS 与双因素认证，并妥善保护 Agent Token 和备份文件。
+
+## 0.0.8
+
+- 远程管理开启后，可按服务器管理本机入站防火墙：IPv4 / IPv6 规则、禁止 ping、入站默认拒绝。规则保存在主控，节点重装后会再下发。
+- Linux 支持 nft / iptables / ufw / firewalld，Windows 走系统防火墙。入站默认拒绝会留下本机回环、已建立连接、SSH（Windows 另留远程桌面 / WinRM），以及 Agent 连主控的通道。
+- SSH 端口先回读本机正在监听的端口，可在后台修改；确认后会同步改 sshd 并重载。改失败会回滚，页面显示实际监听口。
+- 可扫描主机上已有的简单入站规则并收进 Plus，可选停用对应原规则。也可导入、导出规则文件。
+- 节点入站可勾选「同时放行该端口」，按该入站的地址栈写入防火墙；关闭或删除入站时自动去掉。
+- 节点可设置出站地址族：双栈、仅 IPv4、仅 IPv6、IPv4 优先、IPv6 优先。该节点上的 Xray 和 sing-box 共用。
+- 修复删除服务器后，该节点入站、用户和证书记录残留的问题。
+- 防火墙、出站地址族和入站联动放行需搭配 Lite-Plus-agent `0.0.1.5`。
 
 ## 0.0.7
 

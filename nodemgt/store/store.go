@@ -76,7 +76,10 @@ func (s *Store) Migrate() error {
 	if err := s.db.AutoMigrate(models.All()...); err != nil {
 		return err
 	}
-	return s.backfillCertAutoRenew()
+	if err := s.backfillCertAutoRenew(); err != nil {
+		return err
+	}
+	return s.PurgeMissingNodes()
 }
 
 func (s *Store) backfillCertAutoRenew() error {

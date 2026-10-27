@@ -160,11 +160,12 @@ func (s *Store) NodeSnapshot(nodeUUID string) (map[string]any, error) {
 		inbounds[i].SettingsJSON = inboundcfg.NormalizeSniffSettingsJSON(inbounds[i].SettingsJSON)
 	}
 	return map[string]any{
-		"inbounds":  inbounds,
-		"outbounds": outbounds,
-		"routes":    routes,
-		"users":     snapUsers,
-		"certs":     certs,
+		"inbounds":   inbounds,
+		"outbounds":  outbounds,
+		"routes":     routes,
+		"users":      snapUsers,
+		"certs":      certs,
+		"dial_stack": s.NodeDialStack(nodeUUID),
 	}, nil
 }
 

@@ -46,10 +46,13 @@ func ingestBasicInfo(uuid string, info map[string]interface{}, fallbackIP string
 
 func ingestMCPCapability(uuid string, params v2.PullParams) {
 	full := false
+	firewall := false
 	for _, capability := range params.Capabilities {
 		if capability == v2.CapabilityMCPFull {
 			full = true
-			break
+		}
+		if capability == v2.CapabilityFirewall {
+			firewall = true
 		}
 	}
 	version := 0
@@ -57,6 +60,11 @@ func ingestMCPCapability(uuid string, params v2.PullParams) {
 		version = params.CapabilityVersions[v2.CapabilityMCPFull]
 	}
 	clients.SetMCPCapability(uuid, full, version)
+	fwVersion := 0
+	if firewall && params.CapabilityVersions != nil {
+		fwVersion = params.CapabilityVersions[v2.CapabilityFirewall]
+	}
+	clients.SetFirewallCapability(uuid, firewall, fwVersion)
 }
 
 const pingResultLookback = 6 * time.Hour

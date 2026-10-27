@@ -285,7 +285,7 @@ func TestRPCClientsWithoutMCPOmitCapabilityFields(t *testing.T) {
 	node.MCPFull = true
 	node.MCPFullVersion = 1
 	keys := jsonObjectKeys(t, rpcClientsWithoutMCP([]models.Client{node})[0])
-	for _, forbidden := range []string{"mcp_full", "mcp_full_version"} {
+	for _, forbidden := range []string{"mcp_full", "mcp_full_version", "firewall", "firewall_version"} {
 		if keys[forbidden] {
 			t.Fatalf("RPC client leaked %q", forbidden)
 		}

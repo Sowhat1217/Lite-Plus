@@ -45,6 +45,7 @@ import (
 	agent_runtime "github.com/nuomiiiii/lite/web/agent"
 	"github.com/nuomiiiii/lite/web/api"
 	"github.com/nuomiiiii/lite/web/api/admin"
+	"github.com/nuomiiiii/lite/web/firewall"
 	installweb "github.com/nuomiiiii/lite/web/install"
 	"github.com/nuomiiiii/lite/web/mcp"
 	"github.com/nuomiiiii/lite/web/oauth"
@@ -589,6 +590,7 @@ func (a *App) StartBackground() error {
 				st := store.New(dbcore.GetDBInstance())
 				_, _ = ops.New(st).SyncDueTrafficResets(time.Now().UTC())
 				_ = control.PushPending(st, "")
+				firewall.PushPending("")
 			}
 		}
 	}()

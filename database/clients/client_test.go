@@ -10,6 +10,7 @@ import (
 
 	"github.com/nuomiiiii/lite/database/billing"
 	"github.com/nuomiiiii/lite/database/models"
+	nodemgtmodels "github.com/nuomiiiii/lite/nodemgt/models"
 	"github.com/nuomiiiii/lite/pkg/expiry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -227,6 +228,7 @@ func TestDeleteClientCleansAllRelatedRowsAndSharedAssignments(t *testing.T) {
 				&models.Task{},
 				&models.TaskResult{},
 				&models.BillingPriceVersion{},
+				&models.ClientFirewallIntent{},
 			))
 			for _, table := range []string{"records", "records_long_term", "gpu_records", "ping_records"} {
 				require.NoError(t, db.Exec("CREATE TABLE "+table+" (client TEXT NOT NULL, task_id INTEGER)").Error)
@@ -234,6 +236,10 @@ func TestDeleteClientCleansAllRelatedRowsAndSharedAssignments(t *testing.T) {
 			require.NoError(t, db.Create([]models.Client{
 				{UUID: "client-a", Token: "token-a", Name: "Server A"},
 				{UUID: "client-b", Token: "token-b", Name: "Server B"},
+			}).Error)
+			require.NoError(t, db.Create([]models.ClientFirewallIntent{
+				{Client: "client-a", RulesJSON: "[]", BlockPing4: true},
+				{Client: "client-b", RulesJSON: "[]"},
 			}).Error)
 			require.NoError(t, db.Create(&models.BillingPriceVersion{
 				Client: "client-a", ClientName: "Server A", PriceMicros: 1_000_000, Currency: "USD",
@@ -285,6 +291,8 @@ func TestDeleteClientCleansAllRelatedRowsAndSharedAssignments(t *testing.T) {
 			assert.True(t, changed)
 
 			assertRowCount(t, db, &models.Client{}, "uuid = ?", 0, "client-a")
+			assertRowCount(t, db, &models.ClientFirewallIntent{}, "client = ?", 0, "client-a")
+			assertRowCount(t, db, &models.ClientFirewallIntent{}, "client = ?", 1, "client-b")
 			assertRowCount(t, db, &models.PingLossNotification{}, "client = ?", 0, "client-a")
 			assertRowCount(t, db, &models.OfflineNotification{}, "client = ?", 0, "client-a")
 			assertRowCount(t, db, &models.TrafficReportNotification{}, "client = ?", 0, "client-a")
@@ -325,6 +333,37 @@ func assertRowCount(t *testing.T, db *gorm.DB, model any, query string, expected
 	var count int64
 	require.NoError(t, db.Model(model).Where(query, args...).Count(&count).Error)
 	assert.Equal(t, expected, count)
+}
+
+func TestDeleteClientRemovesNodemgtRecords(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:delete-client-nodemgt?mode=memory&cache=shared&_foreign_keys=off"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&models.Client{},
+		&models.MetricCleanupJob{},
+		&models.PingTask{},
+		&models.LoadNotification{},
+		&models.Task{},
+		&nodemgtmodels.Inbound{},
+		&nodemgtmodels.Outbound{},
+		&nodemgtmodels.Route{},
+		&nodemgtmodels.NodeUser{},
+		&nodemgtmodels.Certificate{},
+		&nodemgtmodels.ControlCommand{},
+	))
+	require.NoError(t, db.Create(&models.Client{UUID: "client-a", Token: "token-a", Name: "Server A"}).Error)
+	require.NoError(t, db.Create(&nodemgtmodels.Inbound{ID: "in-a", NodeUUID: "client-a", Name: "edge", Protocol: "vless", Port: 443, Core: nodemgtmodels.CoreXray}).Error)
+	require.NoError(t, db.Create(&nodemgtmodels.Outbound{ID: "ob-a", NodeUUID: "client-a", Name: "exit-a", Protocol: "freedom", Enabled: true}).Error)
+	require.NoError(t, db.Create(&nodemgtmodels.NodeUser{ID: "u-a", NodeUUID: "client-a", Username: "bob", Status: nodemgtmodels.UserActive}).Error)
+
+	_, err = deleteClient(db, "client-a")
+	require.NoError(t, err)
+	assertRowCount(t, db, &models.Client{}, "uuid = ?", 0, "client-a")
+	assertRowCount(t, db, &nodemgtmodels.Inbound{}, "node_uuid = ?", 0, "client-a")
+	assertRowCount(t, db, &nodemgtmodels.Outbound{}, "node_uuid = ?", 0, "client-a")
+	assertRowCount(t, db, &nodemgtmodels.NodeUser{}, "node_uuid = ?", 0, "client-a")
 }
 
 func TestDeleteClientRollsBackRelatedRowsWhenClientDeleteFails(t *testing.T) {

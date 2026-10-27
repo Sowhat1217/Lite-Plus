@@ -1113,6 +1113,7 @@ func doInitialize() error {
 	if err := instance.AutoMigrate(
 		&models.ScheduledExec{},
 		&models.ScheduledExecRun{},
+		&models.ClientFirewallIntent{},
 	); err != nil {
 		return fmt.Errorf("failed to create scheduled exec tables: %w", err)
 	}
@@ -1203,6 +1204,7 @@ func cleanupOrphanedClientData(db *gorm.DB) error {
 			"traffic daily ledger":            &models.TrafficDailyLedger{},
 			"traffic cycle first days":        &models.TrafficCycleFirstDay{},
 			"traffic calibration adjustments": &models.TrafficCalibrationAdjustment{},
+			"firewall intents":                &models.ClientFirewallIntent{},
 		} {
 			if !tx.Migrator().HasTable(model) {
 				continue

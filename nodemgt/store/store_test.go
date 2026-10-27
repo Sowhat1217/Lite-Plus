@@ -56,6 +56,7 @@ func TestPlusTablesMigrated(t *testing.T) {
 	require.Contains(t, names, "nodemgt_grants")
 	require.Contains(t, names, "nodemgt_user_ips")
 	require.Contains(t, names, "nodemgt_user_extra_links")
+	require.Contains(t, names, "nodemgt_node_profiles")
 }
 
 func TestUserPresenceOnlineAndClear(t *testing.T) {
@@ -273,6 +274,56 @@ func TestInboundCRUD(t *testing.T) {
 	list, err = st.ListInbounds("n1")
 	require.NoError(t, err)
 	require.Len(t, list, 0)
+}
+
+func TestDeleteNodeRemovesInboundOutboundUserAndCert(t *testing.T) {
+	st := testDB(t)
+	in := &models.Inbound{NodeUUID: "gone", Name: "in-a", Protocol: "vless", Port: 443}
+	require.NoError(t, st.UpsertInbound(in))
+	keep := &models.Inbound{NodeUUID: "keep", Name: "keep", Protocol: "vless", Port: 80}
+	require.NoError(t, st.UpsertInbound(keep))
+	out := &models.Outbound{NodeUUID: "gone", Name: "exit-a", Protocol: "freedom", Enabled: true}
+	require.NoError(t, st.UpsertOutbound(out))
+	user := &models.NodeUser{NodeUUID: "gone", Username: "bob"}
+	require.NoError(t, st.UpsertUser(user))
+	_, _, err := st.IssueCredential(user.ID, "password", "s3cret", nil)
+	require.NoError(t, err)
+	require.NoError(t, st.UpsertCert(&models.Certificate{NodeUUID: "gone", Domain: "gone.example", Source: models.CertSourceFile, CertPath: "./a.crt", KeyPath: "./a.key"}))
+	_, err = st.UpsertNodeProfile("gone", "prefer_ipv4")
+	require.NoError(t, err)
+	require.NoError(t, st.DeleteNode("gone"))
+	goneIn, err := st.ListInbounds("gone")
+	require.NoError(t, err)
+	require.Len(t, goneIn, 0)
+	keepIn, err := st.ListInbounds("keep")
+	require.NoError(t, err)
+	require.Len(t, keepIn, 1)
+	goneOut, err := st.ListOutbounds("gone")
+	require.NoError(t, err)
+	require.Len(t, goneOut, 0)
+	goneUsers, err := st.ListUsers("gone")
+	require.NoError(t, err)
+	require.Len(t, goneUsers, 0)
+	goneCerts, err := st.ListCerts("gone")
+	require.NoError(t, err)
+	require.Len(t, goneCerts, 0)
+	_, err = st.GetNodeProfile("gone")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestPurgeMissingNodesLeavesLiveClients(t *testing.T) {
+	st := testDB(t)
+	require.NoError(t, st.DB().Exec(`CREATE TABLE clients (uuid TEXT PRIMARY KEY)`).Error)
+	require.NoError(t, st.DB().Exec(`INSERT INTO clients (uuid) VALUES ('live')`).Error)
+	require.NoError(t, st.UpsertInbound(&models.Inbound{NodeUUID: "live", Name: "ok", Protocol: "vless", Port: 1}))
+	require.NoError(t, st.UpsertInbound(&models.Inbound{NodeUUID: "dead", Name: "old", Protocol: "vless", Port: 2}))
+	require.NoError(t, st.PurgeMissingNodes())
+	live, err := st.ListInbounds("live")
+	require.NoError(t, err)
+	require.Len(t, live, 1)
+	dead, err := st.ListInbounds("dead")
+	require.NoError(t, err)
+	require.Len(t, dead, 0)
 }
 
 func TestCredentialHashIndependentOfAdmin(t *testing.T) {
@@ -776,4 +827,17 @@ func TestDeleteCertRejectsInboundReference(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, st.DeleteInbound(in.ID))
 	require.NoError(t, st.DeleteCert(cert.ID))
+}
+
+func TestNodeDialStackPersistsInSnapshot(t *testing.T) {
+	st := testDB(t)
+	require.Equal(t, DialStackDual, st.NodeDialStack("n1"))
+	row, err := st.UpsertNodeProfile("n1", "prefer_ipv6")
+	require.NoError(t, err)
+	require.Equal(t, DialStackPreferIPv6, row.DialStack)
+	require.Equal(t, DialStackPreferIPv6, st.NodeDialStack("n1"))
+	snap, err := st.NodeSnapshot("n1")
+	require.NoError(t, err)
+	require.Equal(t, DialStackPreferIPv6, snap["dial_stack"])
+	require.Equal(t, DialStackDual, st.NodeDialStack("missing"))
 }

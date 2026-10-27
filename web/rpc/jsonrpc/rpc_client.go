@@ -23,6 +23,8 @@ func (c rpcClient) MarshalJSON() ([]byte, error) {
 	}
 	delete(object, "mcp_full")
 	delete(object, "mcp_full_version")
+	delete(object, "firewall")
+	delete(object, "firewall_version")
 	return json.Marshal(object)
 }
 
