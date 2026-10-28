@@ -162,6 +162,33 @@ func TestSSShareUsesMethodPassword(t *testing.T) {
 	}
 }
 
+func TestSSShareDoesNotLeakListenNetwork(t *testing.T) {
+	user := models.NodeUser{Username: "alice"}
+	in := models.Inbound{
+		ID: "ss-in", Name: "US_SS", Protocol: "shadowsocks",
+		Listen: "0.0.0.0", Port: 8388, Enabled: true,
+		SettingsJSON: `{"share_strategy":"other","public_host":"ss.example.com","ss_method":"aes-128-gcm","ss_network":"tcp,udp","transport":"tcp,udp","security":"none"}`,
+	}
+	nodes := Assemble(user, []models.Inbound{in}, []models.Credential{{UUID: "u-1", SecretMaterial: "secret", Enabled: true}}, map[string]bool{"ss-in": true}, nil)
+	if len(nodes) != 1 || nodes[0].Type != "tcp" {
+		t.Fatalf("ss share type must stay tcp, got %+v", nodes)
+	}
+	clash, _, err := Render("clash", nodes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(clash, "network: tcp,udp") {
+		t.Fatalf("clash leaked ss listen network: %s", clash)
+	}
+	sing, _, err := Render("sing-box", nodes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(sing, `"type": "tcp,udp"`) {
+		t.Fatalf("sing-box leaked ss listen network: %s", sing)
+	}
+}
+
 func TestSS2022ShareUsesCombinedPSK(t *testing.T) {
 	user := models.NodeUser{Username: "alice"}
 	in := models.Inbound{

@@ -105,6 +105,15 @@ func TestProtocolForInbound(t *testing.T) {
 	if ProtocolForInbound("vless", "quic") != "udp" {
 		t.Fatal("quic")
 	}
+	if ProtocolForInbound("shadowsocks", "tcp,udp") != "both" {
+		t.Fatal("ss both")
+	}
+	if ProtocolForInbound("shadowsocks", "tcp") != "tcp" {
+		t.Fatal("ss tcp")
+	}
+	if ProtocolForInbound("shadowsocks", "udp") != "udp" {
+		t.Fatal("ss udp")
+	}
 }
 
 func TestInboundComment(t *testing.T) {

@@ -245,6 +245,17 @@ func ProtocolForInbound(protocol, transport string) string {
 	if t == "quic" || strings.Contains(p, "hysteria") || p == "tuic" {
 		return v2.FirewallProtoUDP
 	}
+	if p == "shadowsocks" {
+		t = strings.ReplaceAll(strings.ReplaceAll(t, " ", ""), "/", ",")
+		switch t {
+		case "udp":
+			return v2.FirewallProtoUDP
+		case "tcp":
+			return v2.FirewallProtoTCP
+		default:
+			return v2.FirewallProtoBoth
+		}
+	}
 	return v2.FirewallProtoTCP
 }
 

@@ -56,7 +56,14 @@ func inboundFirewallSpecChanged(prev, next nodemgtmodels.Inbound, nextCfg inboun
 	if !strings.EqualFold(strings.TrimSpace(prevCfg.Stack), strings.TrimSpace(nextCfg.Stack)) {
 		return true
 	}
-	if !strings.EqualFold(strings.TrimSpace(prevCfg.Transport), strings.TrimSpace(nextCfg.Transport)) {
+	if strings.EqualFold(next.Protocol, "shadowsocks") {
+		if inboundcfg.EffectiveSSNetwork(prevCfg) != inboundcfg.EffectiveSSNetwork(nextCfg) {
+			return true
+		}
+		if strings.TrimSpace(prevCfg.SSNetwork) == "" && strings.TrimSpace(nextCfg.SSNetwork) != "" {
+			return true
+		}
+	} else if !strings.EqualFold(strings.TrimSpace(prevCfg.Transport), strings.TrimSpace(nextCfg.Transport)) {
 		return true
 	}
 	return false
@@ -106,27 +113,34 @@ func replaceInboundRules(nodeUUID string, inbound nodemgtmodels.Inbound, cfg inb
 	}
 	intent.Rules = kept
 	if add && inbound.Port > 0 {
-		proto := ProtocolForInbound(inbound.Protocol, cfg.Transport)
+		listenNet := cfg.Transport
+		if strings.EqualFold(inbound.Protocol, "shadowsocks") {
+			listenNet = inboundcfg.EffectiveSSNetwork(cfg)
+		}
+		proto := ProtocolForInbound(inbound.Protocol, listenNet)
 		priority := nextPriority(intent.Rules)
 		for _, stack := range StacksForInbound(cfg.Stack) {
-			rule, err := NormalizeRule(v2.FirewallRule{
+			base := v2.FirewallRule{
 				Enabled:   inbound.Enabled,
 				Action:    v2.FirewallActionAllow,
 				Protocol:  proto,
 				Port:      fmt.Sprintf("%d", inbound.Port),
 				Stack:     stack,
-				Comment:   InboundComment(inbound.Name, inbound.Protocol, proto, stack, inbound.Port),
 				Origin:    v2.FirewallOriginInbound,
 				Priority:  priority,
 				InboundID: inbound.ID,
-			})
-			if err != nil {
-				return err
 			}
-			before := len(intent.Rules)
-			intent.Rules = UpsertRuleByIdentity(intent.Rules, rule)
-			if len(intent.Rules) > before {
-				priority++
+			for _, expanded := range ExpandProtocols(base) {
+				expanded.Comment = InboundComment(inbound.Name, inbound.Protocol, expanded.Protocol, stack, inbound.Port)
+				rule, err := NormalizeRule(expanded)
+				if err != nil {
+					return err
+				}
+				before := len(intent.Rules)
+				intent.Rules = UpsertRuleByIdentity(intent.Rules, rule)
+				if len(intent.Rules) > before {
+					priority++
+				}
 			}
 		}
 	} else if !had {

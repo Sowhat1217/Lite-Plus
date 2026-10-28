@@ -654,6 +654,16 @@ func TestInboundSortAndSubscriptionEnsure(t *testing.T) {
 	require.Equal(t, "xray", first.Format)
 }
 
+func TestNextInboundSortIndexAppendsGlobally(t *testing.T) {
+	st := testDB(t)
+	a := &models.Inbound{NodeUUID: "n1", Name: "a", Protocol: "vless", Port: 1, SortIndex: 1}
+	b := &models.Inbound{NodeUUID: "n2", Name: "b", Protocol: "vless", Port: 2, SortIndex: 4}
+	require.NoError(t, st.UpsertInbound(a))
+	require.NoError(t, st.UpsertInbound(b))
+	require.Equal(t, 5, st.NextInboundSortIndex(""))
+	require.Equal(t, 2, st.NextInboundSortIndex("n1"))
+}
+
 func TestReorderInboundsAcrossNodes(t *testing.T) {
 	st := testDB(t)
 	a := &models.Inbound{NodeUUID: "n1", Name: "a", Protocol: "vless", Port: 1, SortIndex: 1}

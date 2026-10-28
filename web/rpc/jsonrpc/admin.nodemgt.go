@@ -246,6 +246,7 @@ type inboundUpsertParams struct {
 	TCPHeader          string `json:"tcp_header"`
 	TCPHost            string `json:"tcp_host"`
 	SSMethod           string `json:"ss_method"`
+	UDPFragment        *bool  `json:"udp_fragment"`
 	Accounts           []inboundcfg.ProxyAccount `json:"accounts"`
 	AllowTransparent   *bool                     `json:"allow_transparent"`
 	Fingerprint        string `json:"fingerprint"`
@@ -318,8 +319,15 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 			p.Security = inboundcfg.DefaultSecurity(p.Protocol)
 		}
 	}
-	if strings.EqualFold(p.Protocol, "http") || strings.EqualFold(p.Protocol, "shadowsocks") {
+	if strings.EqualFold(p.Protocol, "http") {
 		p.Transport = inboundcfg.DefaultTransport(p.Protocol)
+		if strings.EqualFold(p.Security, "reality") || strings.TrimSpace(p.Security) == "" {
+			p.Security = "none"
+		}
+		p.TCPHeader = ""
+	}
+	if strings.EqualFold(p.Protocol, "shadowsocks") {
+		p.Transport = inboundcfg.NormalizeSSNetwork(p.Transport)
 		if strings.EqualFold(p.Security, "reality") || strings.TrimSpace(p.Security) == "" {
 			p.Security = "none"
 		}
@@ -416,7 +424,7 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 		}
 	}
 	sortIndex := resolveInboundSortIndex(p.ID, p.SortIndex, existing, func() int {
-		return st.NextInboundSortIndex(p.NodeUUID)
+		return st.NextInboundSortIndex("")
 	})
 	cfg := inboundcfg.Settings{
 		Stack:              p.Stack,
@@ -445,6 +453,7 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 		TCPHost:            p.TCPHost,
 		SSMethod:           p.SSMethod,
 		SSPassword:         ssPassword,
+		UDPFragment:        p.UDPFragment,
 		Fingerprint:        p.Fingerprint,
 		SpiderX:            p.SpiderX,
 		Sniffing:           sniffing,
@@ -452,6 +461,13 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 		RouteOnly:          routeOnly,
 		ExcludeFromSub:     excludeFromSub,
 		ShareStrategy:      shareStrategy,
+	}
+	if strings.EqualFold(p.Protocol, "shadowsocks") {
+		cfg.SSNetwork = p.Transport
+		cfg.Transport = "tcp"
+	}
+	if !strings.EqualFold(p.Core, models.CoreSingBox) || !inboundcfg.InboundListensUDP(p.Protocol, cfg) {
+		cfg.UDPFragment = nil
 	}
 	if strings.EqualFold(p.Protocol, "http") {
 		cfg.Accounts = inboundcfg.NormalizeAccounts(p.Accounts)
@@ -541,7 +557,11 @@ func nodemgtInboundUpsert(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 
 func inboundView(row models.Inbound) map[string]any {
 	s := inboundcfg.Parse(row.SettingsJSON)
-	return map[string]any{
+	transport := s.Transport
+	if strings.EqualFold(row.Protocol, "shadowsocks") {
+		transport = inboundcfg.EffectiveSSNetwork(s)
+	}
+	view := map[string]any{
 		"id":                   row.ID,
 		"node_uuid":            row.NodeUUID,
 		"core":                 row.Core,
@@ -558,7 +578,7 @@ func inboundView(row models.Inbound) map[string]any {
 		"public_host":          s.PublicHost,
 		"public_port":          s.PublicPort,
 		"flow":                 s.Flow,
-		"transport":            s.Transport,
+		"transport":            transport,
 		"security":             s.Security,
 		"sni":                  s.SNI,
 		"tls_domain":           s.TLSDomain,
@@ -590,6 +610,10 @@ func inboundView(row models.Inbound) map[string]any {
 		"share_strategy":       s.ShareStrategy,
 		"firewall_linked":      firewall.InboundLinked(row.NodeUUID, row.ID),
 	}
+	if strings.EqualFold(row.Core, models.CoreSingBox) && inboundcfg.InboundListensUDP(row.Protocol, s) {
+		view["udp_fragment"] = inboundcfg.EffectiveUDPFragment(row.Protocol, s)
+	}
+	return view
 }
 
 func nodemgtInboundDelete(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {

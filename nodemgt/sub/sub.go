@@ -209,6 +209,9 @@ func assembleWithAddrs(user models.NodeUser, inbounds []models.Inbound, creds []
 		if transport == "" {
 			transport = "tcp"
 		}
+		if strings.EqualFold(in.Protocol, "shadowsocks") {
+			transport = "tcp"
+		}
 		flow := shareFlow(in, cfg, user, transport, security)
 		path, hostHeader, serviceName, mode := shareTransportFields(transport, cfg)
 		sni := inboundcfg.ShareSNI(cfg)

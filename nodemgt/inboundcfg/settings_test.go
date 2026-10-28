@@ -85,6 +85,57 @@ func TestDefaultSSMethodIs2022(t *testing.T) {
 	}
 }
 
+func TestEffectiveUDPFragmentDefaultsOff(t *testing.T) {
+	if EffectiveUDPFragment("shadowsocks", Settings{}) {
+		t.Fatal("default ss must not fragment")
+	}
+	on := true
+	if !EffectiveUDPFragment("shadowsocks", Settings{UDPFragment: &on}) {
+		t.Fatal("explicit on")
+	}
+	off := false
+	if EffectiveUDPFragment("shadowsocks", Settings{UDPFragment: &off}) {
+		t.Fatal("explicit off")
+	}
+	if EffectiveUDPFragment("hysteria2", Settings{}) {
+		t.Fatal("hy2 default off")
+	}
+	if EffectiveUDPFragment("vless", Settings{}) {
+		t.Fatal("vless must not fragment")
+	}
+}
+
+func TestDefaultSSNetworkIsTCPUDP(t *testing.T) {
+	if got := DefaultTransport("shadowsocks"); got != "tcp,udp" {
+		t.Fatalf("default ss transport %s", got)
+	}
+	if got := NormalizeSSNetwork(""); got != "tcp,udp" {
+		t.Fatalf("empty ss network %s", got)
+	}
+	if got := NormalizeSSNetwork("TCP"); got != "tcp" {
+		t.Fatalf("tcp %s", got)
+	}
+	if got := NormalizeSSNetwork("UDP"); got != "udp" {
+		t.Fatalf("udp %s", got)
+	}
+	if got := NormalizeSSNetwork("TCP, UDP"); got != "tcp,udp" {
+		t.Fatalf("tcp,udp %s", got)
+	}
+	legacy := EffectiveSSNetwork(Settings{Transport: "tcp"})
+	if legacy != "tcp,udp" {
+		t.Fatalf("legacy ss tcp must stay both, got %s", legacy)
+	}
+	if got := EffectiveSSNetwork(Settings{Transport: "tcp", SSNetwork: "tcp"}); got != "tcp" {
+		t.Fatalf("explicit tcp %s", got)
+	}
+	if got := EffectiveSSNetwork(Settings{SSNetwork: "udp"}); got != "udp" {
+		t.Fatalf("explicit udp %s", got)
+	}
+	if got := EffectiveSSNetwork(Settings{Transport: "tcp,udp", SSNetwork: "tcp,udp"}); got != "tcp,udp" {
+		t.Fatalf("listen both %s", got)
+	}
+}
+
 func TestShadowsocksForcesTCPAndDropsHTTPHeader(t *testing.T) {
 	raw := StreamJSON(Settings{Transport: "ws", Security: "reality", TCPHeader: "http", TCPHost: "example.com"}, "shadowsocks")
 	var stream map[string]any
@@ -99,6 +150,13 @@ func TestShadowsocksForcesTCPAndDropsHTTPHeader(t *testing.T) {
 	}
 	if _, ok := stream["tcpSettings"]; ok {
 		t.Fatalf("tcp camouflage leaked: %s", raw)
+	}
+	both := StreamJSON(Settings{Transport: "tcp,udp", SSNetwork: "tcp,udp"}, "shadowsocks")
+	if err := json.Unmarshal([]byte(both), &stream); err != nil {
+		t.Fatal(err)
+	}
+	if stream["network"] != "tcp" {
+		t.Fatalf("ss stream must stay tcp, got %v in %s", stream["network"], both)
 	}
 }
 

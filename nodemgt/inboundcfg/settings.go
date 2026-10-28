@@ -35,6 +35,8 @@ type Settings struct {
 	TCPHost            string `json:"tcp_host,omitempty"`
 	SSMethod           string `json:"ss_method,omitempty"`
 	SSPassword         string `json:"ss_password,omitempty"`
+	SSNetwork          string `json:"ss_network,omitempty"`
+	UDPFragment        *bool  `json:"udp_fragment,omitempty"`
 	Accounts           []ProxyAccount `json:"accounts,omitempty"`
 	AllowTransparent   bool           `json:"allow_transparent,omitempty"`
 	Fingerprint        string `json:"fingerprint,omitempty"`
@@ -205,8 +207,57 @@ func DefaultTransport(protocol string) string {
 	switch strings.ToLower(protocol) {
 	case "hysteria2", "tuic":
 		return "quic"
+	case "shadowsocks":
+		return "tcp,udp"
 	default:
 		return "tcp"
+	}
+}
+
+func NormalizeSSNetwork(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, "/", ",")
+	s = strings.ReplaceAll(s, "+", ",")
+	switch s {
+	case "udp":
+		return "udp"
+	case "tcp":
+		return "tcp"
+	default:
+		return "tcp,udp"
+	}
+}
+
+func InboundListensUDP(protocol string, s Settings) bool {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "hysteria2", "tuic":
+		return true
+	case "shadowsocks":
+		return EffectiveSSNetwork(s) != "tcp"
+	default:
+		return false
+	}
+}
+
+func EffectiveUDPFragment(protocol string, s Settings) bool {
+	if s.UDPFragment != nil {
+		return *s.UDPFragment
+	}
+	return false
+}
+
+func EffectiveSSNetwork(s Settings) string {
+	if n := strings.TrimSpace(s.SSNetwork); n != "" {
+		return NormalizeSSNetwork(n)
+	}
+	t := strings.ToLower(strings.TrimSpace(s.Transport))
+	t = strings.ReplaceAll(t, " ", "")
+	switch t {
+	case "udp", "tcp,udp", "tcp+udp", "tcp/udp", "tcpudp":
+		return NormalizeSSNetwork(t)
+	default:
+		return "tcp,udp"
 	}
 }
 

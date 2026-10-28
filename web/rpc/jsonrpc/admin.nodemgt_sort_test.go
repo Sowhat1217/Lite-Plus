@@ -1,6 +1,8 @@
 package jsonrpc
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/nuomiiiii/lite/nodemgt/models"
@@ -30,5 +32,16 @@ func TestResolveInboundSortIndexKeepsZero(t *testing.T) {
 	})
 	if !called || got != 7 {
 		t.Fatalf("omitted sort on create must auto-assign, got %d", got)
+	}
+}
+
+func TestInboundCreateEmptySortUsesGlobalLast(t *testing.T) {
+	src, err := os.ReadFile("admin.nodemgt.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upsert := extractGoFunc(string(src), "func nodemgtInboundUpsert")
+	if !strings.Contains(upsert, `st.NextInboundSortIndex("")`) {
+		t.Fatal("empty sort must append after the global max, not the node max")
 	}
 }
